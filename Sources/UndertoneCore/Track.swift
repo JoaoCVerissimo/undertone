@@ -1,7 +1,7 @@
 import Foundation
 
 /// A resolved, playable stream plus the metadata the UI shows.
-public struct Track: Equatable, Sendable, Identifiable {
+public struct Track: Equatable, Sendable, Identifiable, Codable {
     public var id: String
     public var title: String
     public var channel: String?

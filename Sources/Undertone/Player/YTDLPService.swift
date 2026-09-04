@@ -31,6 +31,7 @@ final class YTDLPService {
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let log = Logger(subsystem: "com.jverissimo.undertone", category: "ytdlp")
     @ObservationIgnored private var cachedLoginPATH: String?
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -38,6 +39,20 @@ final class YTDLPService {
 
     var client: YTDLPClient? {
         executable.map(makeClient)
+    }
+
+    /// Kick off the initial locate+probe. Call once at launch.
+    func start() {
+        guard refreshTask == nil else { return }
+        refreshTask = Task { await refresh() }
+    }
+
+    /// The client, waiting for the first probe to finish if it is still running. This is what callers
+    /// should use so a link opened right after launch waits for yt-dlp instead of failing "not installed".
+    func readyClient() async -> YTDLPClient? {
+        if refreshTask == nil { start() }
+        await refreshTask?.value
+        return client
     }
 
     var installCommand: String {
@@ -48,10 +63,10 @@ final class YTDLPService {
     }
 
     /// Locates the tools and probes the version. Safe to call again (Recheck button, path change).
-    func refresh() async {
+    func refresh(rereadLoginPath: Bool = false) async {
         status = .checking
         let home = NSHomeDirectory()
-        if cachedLoginPATH == nil { cachedLoginPATH = await Self.loginShellPATH() }
+        if cachedLoginPATH == nil || rereadLoginPath { cachedLoginPATH = await Self.loginShellPATH() }
         searchPath = ToolPaths.mergedPATH(home: home, loginPATH: cachedLoginPATH, currentPATH: ProcessInfo.processInfo.environment["PATH"])
         environment = ToolPaths.environment(home: home, path: searchPath)
         jsRuntime = ToolPaths.locate("deno", in: searchPath)

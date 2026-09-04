@@ -48,6 +48,9 @@ struct URLBar: View {
         .onChange(of: state.showCount, initial: true) { _, _ in
             if engine.track == nil && !engine.isResolving { focused = true }
         }
+        .onChange(of: state.urlText) { _, text in
+            engine.warm(text)
+        }
     }
 
     private func submit() {

@@ -19,15 +19,27 @@ final class PlayerEngine {
     /// Bumped on every seek so observers (Now Playing) resync their elapsed time.
     private(set) var seekGeneration = 0
     private(set) var speed: PlaybackSpeed
+    private(set) var repeatMode: RepeatMode
+    private(set) var isMuted = false
     private(set) var errorMessage: String?
     private(set) var errorSuggestion: String?
     private(set) var notice: String?
 
     var volume: Float {
         didSet {
-            player.volume = volume
+            player.volume = isMuted ? 0 : volume
             settings.volume = Double(volume)
         }
+    }
+
+    /// What the slider shows: 0 while muted.
+    var effectiveVolume: Float { isMuted ? 0 : volume }
+
+    var volumeSymbol: String {
+        if isMuted || volume == 0 { return "speaker.slash.fill" }
+        if volume < 0.34 { return "speaker.wave.1.fill" }
+        if volume < 0.67 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
     }
 
     /// yt-dlp's duration wins: AVFoundation reports double the real length for YouTube's m4a streams.
@@ -47,7 +59,8 @@ final class PlayerEngine {
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var resolveTask: Task<Void, Never>?
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
-    @ObservationIgnored private var prefetched: Track?
+    @ObservationIgnored private var warmTask: Task<Track?, Never>?
+    @ObservationIgnored private var warmKey: String?
     @ObservationIgnored private var currentLink: MediaLink?
     @ObservationIgnored private var pastedURL: URL?
     @ObservationIgnored private var recoveredOnce = false
@@ -56,6 +69,7 @@ final class PlayerEngine {
         self.settings = settings
         self.service = service
         speed = settings.speed
+        repeatMode = settings.repeatMode
         volume = Float(settings.volume)
         player.volume = volume
         player.defaultRate = Float(speed.rawValue)
@@ -91,7 +105,6 @@ final class PlayerEngine {
     func open(_ link: MediaLink) {
         resolveTask?.cancel()
         prefetchTask?.cancel()
-        prefetched = nil
         clearError()
         notice = nil
         pastedURL = link.original
@@ -111,13 +124,14 @@ final class PlayerEngine {
     }
 
     private func openPlaylist(_ link: MediaLink) {
-        guard let client = service.client else { handle(YTDLPFailure.notInstalled); return }
         isResolving = true
         resolvingTitle = "Loading playlist…"
         resolveTask = Task { [weak self] in
+            guard let self else { return }
             do {
+                guard let client = await self.service.readyClient() else { self.handle(YTDLPFailure.notInstalled); return }
                 let entries = try await client.playlistEntries(link)
-                guard let self, !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return }
                 var startVideo: String?
                 var startIndex: Int?
                 if case .playlist(_, let v, let i) = link.kind {
@@ -134,31 +148,63 @@ final class PlayerEngine {
                 }
                 self.resolveAndPlay(first.link, startAt: link.startTime)
             } catch {
-                self?.handle(error)
+                self.handle(error)
             }
         }
     }
 
     private func resolveAndPlay(_ link: MediaLink, startAt: Double? = nil) {
-        guard let client = service.client else { handle(YTDLPFailure.notInstalled); return }
         resolveTask?.cancel()
         currentLink = link
+        let key = link.cacheKey
+
+        if let cached = settings.streamCache.track(forKey: key) {
+            log.notice("cache hit \(key, privacy: .public)")
+            load(cached, startAt: startAt)
+            return
+        }
+
         isResolving = true
         resolvingTitle = queue?.current?.title ?? "Resolving…"
+        let pendingWarmUp: Task<Track?, Never>? = (warmKey == key) ? warmTask : nil
         resolveTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                let track: Track
-                if let ready = self?.prefetched, ready.id == link.videoID, !ready.isExpired() {
-                    track = ready
-                } else {
+                var track: Track?
+                if let pendingWarmUp {
+                    track = await pendingWarmUp.value   // the clipboard warm-up is already fetching this one
+                }
+                if track == nil {
+                    guard let client = await self.service.readyClient() else { self.handle(YTDLPFailure.notInstalled); return }
                     track = try await client.resolve(link)
                 }
-                guard let self, !Task.isCancelled else { return }
-                self.prefetched = nil
+                guard let track, !Task.isCancelled else { return }
+                self.settings.streamCache.store(track, forKey: key)
                 self.load(track, startAt: startAt)
             } catch {
-                self?.handle(error)
+                self.handle(error)
             }
+        }
+    }
+
+    /// Resolves a pasted/clipboard link in the background so pressing Play afterwards is instant.
+    /// Debounced, deduplicated by cache key, and invisible to the UI.
+    func warm(_ text: String) {
+        guard let link = LinkParser.parse(text), !link.isPlaylist, let client = service.client else { return }
+        let key = link.cacheKey
+        guard key != track?.id, !settings.streamCache.contains(key), warmKey != key else { return }
+        warmTask?.cancel()
+        warmKey = key
+        warmTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, let track = try? await client.resolve(link), !Task.isCancelled else {
+                if self?.warmKey == key { self?.warmKey = nil }
+                return nil
+            }
+            self?.settings.streamCache.store(track, forKey: key)
+            if self?.warmKey == key { self?.warmKey = nil }
+            self?.log.notice("warmed \(key, privacy: .public)")
+            return track
         }
     }
 
@@ -233,6 +279,7 @@ final class PlayerEngine {
         }
         if track.isExpired(), let link = currentLink {
             log.notice("stream expired; re-resolving")
+            settings.streamCache.remove(forKey: link.cacheKey)
             resolveAndPlay(link, startAt: currentTime)
             return
         }
@@ -262,6 +309,26 @@ final class PlayerEngine {
 
     func cycleSpeed() {
         setSpeed(speed.next)
+    }
+
+    func setRepeatMode(_ mode: RepeatMode) {
+        repeatMode = mode
+        settings.repeatMode = mode
+    }
+
+    func cycleRepeatMode() {
+        setRepeatMode(repeatMode.next(hasQueue: queue != nil))
+    }
+
+    func setVolume(_ value: Float) {
+        let clamped = max(0, min(1, value))
+        if isMuted, clamped > 0 { isMuted = false }
+        volume = clamped
+    }
+
+    func toggleMute() {
+        isMuted.toggle()
+        player.volume = isMuted ? 0 : volume
     }
 
     func seek(to seconds: Double) {
@@ -306,7 +373,8 @@ final class PlayerEngine {
     func stop() {
         resolveTask?.cancel()
         prefetchTask?.cancel()
-        prefetched = nil
+        warmTask?.cancel()
+        warmKey = nil
         teardownItem()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -338,15 +406,37 @@ final class PlayerEngine {
     // MARK: - Events
 
     private func trackEnded() {
-        log.notice("ended \(self.track?.title ?? "", privacy: .public)")
-        if var q = queue, q.hasNext {
-            q.advance()
-            queue = q
-            if let entry = q.current { resolveAndPlay(entry.link) }
-        } else {
-            hasEnded = true
-            if let d = duration { currentTime = d }
+        log.notice("ended \(self.track?.title ?? "", privacy: .public) repeat=\(self.repeatMode.rawValue, privacy: .public)")
+        switch repeatMode {
+        case .one:
+            restartCurrentTrack()
+        case .all:
+            if var q = queue {
+                if q.hasNext { q.advance() } else { q.jump(to: 0) }
+                queue = q
+                if let entry = q.current { resolveAndPlay(entry.link) }
+            } else {
+                restartCurrentTrack()
+            }
+        case .off:
+            if var q = queue, q.hasNext {
+                q.advance()
+                queue = q
+                if let entry = q.current { resolveAndPlay(entry.link) }
+            } else {
+                hasEnded = true
+                if let d = duration { currentTime = d }
+            }
         }
+    }
+
+    private func restartCurrentTrack() {
+        hasEnded = false
+        currentTime = 0
+        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        player.defaultRate = Float(speed.rawValue)
+        player.play()
+        seekGeneration += 1
     }
 
     private func itemFailed(_ error: Error?) {
@@ -354,6 +444,7 @@ final class PlayerEngine {
         log.error("item failed: \(description, privacy: .public)")
         if !recoveredOnce, let link = currentLink {
             recoveredOnce = true
+            settings.streamCache.remove(forKey: link.cacheKey)
             let position = currentTime
             resolveAndPlay(link, startAt: position > 1 ? position : nil)
         } else {
@@ -363,12 +454,13 @@ final class PlayerEngine {
 
     private func prefetchNext() {
         prefetchTask?.cancel()
-        prefetched = nil
         guard let nextEntry = queue?.next, let client = service.client else { return }
+        let key = nextEntry.link.cacheKey
+        guard !settings.streamCache.contains(key) else { return }
         prefetchTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, let track = try? await client.resolve(nextEntry.link), !Task.isCancelled else { return }
-            self?.prefetched = track
+            self?.settings.streamCache.store(track, forKey: key)
         }
     }
 

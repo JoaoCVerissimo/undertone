@@ -17,7 +17,7 @@ struct MainView: View {
                 NowPlayingCard()
                 Scrubber()
                 TransportBar()
-                SpeedPicker()
+                SecondaryControls()
             } else {
                 EmptyHint()
             }

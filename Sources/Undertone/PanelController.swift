@@ -22,8 +22,14 @@ final class PanelState {
 
     /// Offers whatever link is on the clipboard, unless it is what is already playing.
     func prefillFromClipboard(currentLink: String?) {
-        guard let text = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let link = LinkParser.parse(text),
+        guard let raw = NSPasteboard.general.string(forType: .string) else { return }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Offer the clipboard only when it *is* a link, not when it merely contains one — otherwise a
+        // shell command or paragraph with a URL inside it would land in the field. A bare URL has no
+        // spaces and no line breaks; anything else is left for the explicit Paste & Play button.
+        guard !text.isEmpty, text.count <= 400,
+              !text.contains(where: { $0 == " " || $0.isNewline || $0 == "\t" }),
+              let link = LinkParser.parse(text), link.isYouTube,
               link.original.absoluteString != currentLink
         else { return }
         urlText = text
@@ -91,6 +97,7 @@ final class PanelController {
         applyAppearance()
         state.showingSettings = false
         state.prefillFromClipboard(currentLink: settings.lastLink)
+        if !state.urlText.isEmpty { engine.warm(state.urlText) }
         state.showCount += 1
         position(relativeTo: button)
         panel.alphaValue = 0
@@ -111,8 +118,12 @@ final class PanelController {
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.1
             panel.animator().alphaValue = 0
-        }, completionHandler: { [panel] in
-            MainActor.assumeIsolated { panel.orderOut(nil) }
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                // A show() during the fade-out must win; otherwise this would hide the freshly shown panel.
+                guard let self, !self.isVisible else { return }
+                self.panel.orderOut(nil)
+            }
         })
     }
 

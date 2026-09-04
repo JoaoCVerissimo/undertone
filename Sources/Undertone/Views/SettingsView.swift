@@ -58,11 +58,9 @@ struct SettingsView: View {
             }
 
             section("General") {
-                HStack {
-                    Text("Volume").font(.caption).frame(width: 60, alignment: .leading)
-                    Slider(value: Binding(get: { Double(engine.volume) }, set: { engine.volume = Float($0) }), in: 0...1)
-                        .controlSize(.small)
-                }
+                Toggle("Show track title in the menu bar", isOn: $settings.showTitleInMenuBar)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -104,7 +102,7 @@ struct SettingsView: View {
                     Spacer(minLength: 0)
                 }
                 HStack {
-                    Button("Recheck") { Task { await service.refresh() } }
+                    Button("Recheck") { Task { await service.refresh(rereadLoginPath: true) } }
                     Button("Choose…") { choosePath() }
                     if settings.ytdlpPathOverride != nil {
                         Button("Use default") { service.setOverride(nil) }

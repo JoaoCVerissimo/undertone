@@ -37,7 +37,7 @@ struct ToolStatusBanner: View {
                         .foregroundStyle(.secondary)
                         .help("Copy command")
                         Spacer()
-                        Button("Recheck") { Task { await service.refresh() } }
+                        Button("Recheck") { Task { await service.refresh(rereadLoginPath: true) } }
                             .controlSize(.mini)
                     }
                 }

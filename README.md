@@ -21,8 +21,11 @@ Built for macOS 26 (Tahoe) with a real Liquid Glass panel you can tint to any co
 
 - **Paste & play** any YouTube video, playlist, or Music link — or most other sites yt-dlp supports.
 - **No ads, no video.** Audio-only; typically ~40 MB of memory while playing.
-- **Playback controls:** play/pause, back/forward 15 seconds, a scrubber, and **1× / 1.5× / 2×** speed with the
-  pitch preserved.
+- **Playback controls:** play/pause, back/forward 15 seconds, a scrubber, **1× / 1.5× / 2×** speed with the
+  pitch preserved, **repeat** (off / all / one), and **volume** with a mute toggle.
+- **Instant replays.** Resolved streams are cached (they stay valid for hours), so replaying anything from
+  Recent starts immediately instead of waiting. The clipboard link is also resolved the moment you open the
+  panel, so pressing Play is instant.
 - **Playlists:** paste a playlist link and it plays through, with next/previous. The next track is fetched ahead
   of time so changes are quick.
 - **Media keys & Now Playing:** the F7–F9 keys, AirPod taps, and the Control Center widget control Undertone
@@ -30,6 +33,8 @@ Built for macOS 26 (Tahoe) with a real Liquid Glass panel you can tint to any co
 - **Global shortcuts:** configurable hotkeys for play/pause (`⌃⌥P`), cycle speed (`⌃⌥S`), open the panel
   (`⌃⌥Y`), and next/previous (`⌃⌥→` / `⌃⌥←`).
 - **Recent links:** the last ten things you played, one click to replay.
+- **Volume from the menu bar:** scroll over the icon to change volume; optionally show the track title next to
+  the icon.
 - **Liquid Glass, your colour:** pick a tint and glass style; the whole panel is one tinted glass surface.
 - **Stays out of the way:** no Dock icon, low memory, and quitting fully stops everything.
 
@@ -86,7 +91,9 @@ Undertone registers `undertone://` so you can drive it from scripts, Shortcuts, 
 ```
 undertone://play?url=<youtube-url>   undertone://play      undertone://pause
 undertone://toggle                   undertone://next      undertone://previous
-undertone://speed?value=2            undertone://open      undertone://quit
+undertone://speed?value=2            undertone://seek?to=90
+undertone://volume?value=0.5         undertone://mute      undertone://repeat?mode=one
+undertone://open                     undertone://quit
 ```
 
 ## How it works
@@ -99,7 +106,8 @@ undertone://speed?value=2            undertone://open      undertone://quit
    scrubber, and speed in sync.
 
 Nothing is downloaded to disk and no video is ever decoded. yt-dlp's reported duration is used for the progress
-bar because YouTube's audio streams report a misleading length to the player.
+bar because YouTube's audio streams report a misleading length to the player. Resolved stream URLs are cached
+until their expiry so replays skip yt-dlp entirely.
 
 ### Why it needs yt-dlp
 

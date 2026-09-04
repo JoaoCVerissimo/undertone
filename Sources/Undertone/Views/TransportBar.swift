@@ -66,6 +66,62 @@ struct SpeedPicker: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .controlSize(.small)
-        .frame(width: 180)
+        .frame(width: 150)
+    }
+}
+
+/// Repeat · speed · volume, on one row under the transport.
+struct SecondaryControls: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            RepeatButton()
+            Spacer(minLength: 2)
+            SpeedPicker()
+            Spacer(minLength: 2)
+            VolumeControl()
+        }
+    }
+}
+
+struct RepeatButton: View {
+    @Environment(PlayerEngine.self) private var engine
+
+    var body: some View {
+        Button {
+            engine.cycleRepeatMode()
+        } label: {
+            Image(systemName: engine.repeatMode.symbolName)
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 26, height: 22)
+                .background(engine.repeatMode.isOn ? Color.primary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(engine.repeatMode.isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+        .help(engine.repeatMode.label)
+    }
+}
+
+struct VolumeControl: View {
+    @Environment(PlayerEngine.self) private var engine
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button {
+                engine.toggleMute()
+            } label: {
+                Image(systemName: engine.volumeSymbol)
+                    .font(.system(size: 11, weight: .medium))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(engine.isMuted ? "Unmute" : "Mute")
+            Slider(value: Binding(get: { Double(engine.effectiveVolume) }, set: { engine.setVolume(Float($0)) }), in: 0...1)
+                .controlSize(.mini)
+                .frame(width: 70)
+                .help("Volume (or scroll over the menu bar icon)")
+        }
     }
 }

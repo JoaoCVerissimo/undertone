@@ -7,6 +7,9 @@ final class StatusItemController: NSObject {
     private let engine: PlayerEngine
     private let panel: PanelController
     private let settings: AppSettings
+    private var scrollMonitor: Any?
+    private var flashTask: Task<Void, Never>?
+    private var flashText: String?
 
     init(engine: PlayerEngine, panel: PanelController, settings: AppSettings) {
         self.engine = engine
@@ -20,10 +23,39 @@ final class StatusItemController: NSObject {
             button.action = #selector(clicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.toolTip = "Undertone"
+            button.font = NSFont.menuBarFont(ofSize: 0)
         }
         panel.statusButton = statusItem.button
         updateIcon()
         observe()
+        installScrollVolume()
+    }
+
+    /// Scrolling over the menu bar icon adjusts the volume; swipe/roll up = louder, regardless of the
+    /// "natural scrolling" setting. Shows the level briefly next to the icon.
+    private func installScrollVolume() {
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, let button = self.statusItem.button, event.window == button.window else { return event }
+            let raw = event.scrollingDeltaY
+            guard raw != 0 else { return event }
+            let up = event.isDirectionInvertedFromDevice ? -raw : raw
+            let step = event.hasPreciseScrollingDeltas ? up / 100 : up / 8
+            self.engine.setVolume(self.engine.volume + Float(step))
+            self.flash("\(Int((self.engine.volume * 100).rounded()))%")
+            return nil
+        }
+    }
+
+    private func flash(_ text: String) {
+        flashText = text
+        updateIcon()
+        flashTask?.cancel()
+        flashTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self else { return }
+            self.flashText = nil
+            self.updateIcon()
+        }
     }
 
     @objc private func clicked(_ sender: Any?) {
@@ -73,6 +105,7 @@ final class StatusItemController: NSObject {
             _ = engine.isPlaying
             _ = engine.isResolving
             _ = engine.track
+            _ = settings.showTitleInMenuBar
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -97,5 +130,21 @@ final class StatusItemController: NSObject {
             .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
         image?.isTemplate = true
         statusItem.button?.image = image
+
+        var title = ""
+        if let flashText {
+            title = flashText
+        } else if settings.showTitleInMenuBar, let track = engine.track {
+            title = Self.truncated(track.title, to: 30)
+        }
+        statusItem.length = title.isEmpty ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        statusItem.button?.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
+        statusItem.button?.title = title.isEmpty ? "" : " " + title
+    }
+
+    private static func truncated(_ text: String, to limit: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        return String(trimmed.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 }

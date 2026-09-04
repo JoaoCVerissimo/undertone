@@ -45,6 +45,9 @@ public struct MediaLink: Equatable, Sendable {
 
     public var isPlaylist: Bool { playlistID != nil }
 
+    /// Stable key for the stream cache: the video id for YouTube, the URL for other sites.
+    public var cacheKey: String { videoID ?? resolvedURL.absoluteString }
+
     /// Canonical URL to give yt-dlp.
     public var resolvedURL: URL {
         switch kind {

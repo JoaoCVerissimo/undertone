@@ -47,6 +47,9 @@ final class AppSettings {
         static let recent = "recentLinks"
         static let ytdlpPath = "ytdlpPath"
         static let lastLink = "lastLink"
+        static let repeatMode = "repeatMode"
+        static let showTitle = "showTitleInMenuBar"
+        static let streamCache = "streamCache"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -63,6 +66,9 @@ final class AppSettings {
         recent = RecentLinksStore(decoding: defaults.data(forKey: Keys.recent) ?? Data())
         ytdlpPathOverride = defaults.string(forKey: Keys.ytdlpPath)
         lastLink = defaults.string(forKey: Keys.lastLink)
+        repeatMode = RepeatMode(rawValue: defaults.string(forKey: Keys.repeatMode) ?? "") ?? .off
+        showTitleInMenuBar = defaults.bool(forKey: Keys.showTitle)
+        streamCache = StreamCache(decoding: defaults.data(forKey: Keys.streamCache) ?? Data())
     }
 
     /// `nil` means plain, untinted glass. Stored as "" so the default tint is not re-applied on next launch.
@@ -92,5 +98,15 @@ final class AppSettings {
     }
     var lastLink: String? {
         didSet { defaults.set(lastLink, forKey: Keys.lastLink) }
+    }
+    var repeatMode: RepeatMode {
+        didSet { defaults.set(repeatMode.rawValue, forKey: Keys.repeatMode) }
+    }
+    var showTitleInMenuBar: Bool {
+        didSet { defaults.set(showTitleInMenuBar, forKey: Keys.showTitle) }
+    }
+    /// Resolved streams survive relaunches (they stay valid for ~6 h), so recent replays are instant.
+    var streamCache: StreamCache {
+        didSet { defaults.set((try? streamCache.encoded()) ?? Data(), forKey: Keys.streamCache) }
     }
 }

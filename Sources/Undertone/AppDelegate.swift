@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = PanelController(settings: settings, engine: engine, service: service)
         statusItem = StatusItemController(engine: engine, panel: panel, settings: settings)
         Hotkeys.install(engine: engine, panel: panel)
-        Task { await service.refresh() }
+        service.start()
         isReady = true
         log.notice("launched from \(Bundle.main.bundleURL.path, privacy: .public)")
     }
@@ -35,7 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in queued { handle(url) }
     }
 
-    /// `undertone://play?url=…`, `undertone://play`, `undertone://pause`, `undertone://toggle`, `undertone://next`, `undertone://open`
+    /// `undertone://play?url=…` `play` `pause` `toggle` `next` `previous` `seek?to=90` `speed?value=2`
+    /// `volume?value=0.5` `mute` `repeat?mode=one` `open` `quit`
     func application(_ application: NSApplication, open urls: [URL]) {
         guard isReady else {
             pendingURLs.append(contentsOf: urls)
@@ -64,6 +65,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 engine.setSpeed(speed)
             } else {
                 engine.cycleSpeed()
+            }
+        case "seek":
+            if let raw = query.first(where: { $0.name == "to" })?.value, let seconds = Double(raw) { engine.seek(to: seconds) }
+        case "volume":
+            if let raw = query.first(where: { $0.name == "value" })?.value, let value = Float(raw) { engine.setVolume(value) }
+        case "mute": engine.toggleMute()
+        case "repeat":
+            if let raw = query.first(where: { $0.name == "mode" })?.value, let mode = RepeatMode(rawValue: raw) {
+                engine.setRepeatMode(mode)
+            } else {
+                engine.cycleRepeatMode()
             }
         case "open": panel.show()
         case "quit": NSApp.terminate(nil)
