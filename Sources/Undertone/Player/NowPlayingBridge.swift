@@ -63,6 +63,7 @@ final class NowPlayingBridge {
         withObservationTracking {
             _ = engine.track
             _ = engine.isPlaying
+            _ = engine.isBuffering
             _ = engine.speed
             _ = engine.seekGeneration
             _ = engine.queue?.index
@@ -85,7 +86,7 @@ final class NowPlayingBridge {
             MPMediaItemPropertyTitle: track.title,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: engine.currentTime,
-            MPNowPlayingInfoPropertyPlaybackRate: engine.isPlaying ? engine.speed.rawValue : 0,
+            MPNowPlayingInfoPropertyPlaybackRate: (engine.isPlaying && !engine.isBuffering) ? engine.speed.rawValue : 0,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: engine.speed.rawValue,
         ]
         if let channel = track.channel { info[MPMediaItemPropertyArtist] = channel }

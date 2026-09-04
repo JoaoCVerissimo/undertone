@@ -23,7 +23,6 @@ struct TransportBar: View {
             }
             .buttonStyle(.plain)
             .help(engine.isPlaying ? "Pause" : "Play")
-            .keyboardShortcut(.space, modifiers: [])
             TransportButton(symbol: "goforward.15", size: 19, help: "Forward 15 seconds") { engine.skip(by: 15) }
             if engine.queue != nil {
                 TransportButton(symbol: "forward.end.fill", size: 15, help: "Next") { engine.next() }

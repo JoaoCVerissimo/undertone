@@ -57,8 +57,8 @@ public enum YTDLPDiagnostics {
         if mentions("javascript runtime", "js runtime", "no supported javascript", "--js-runtimes") {
             return .missingJSRuntime(message: message.isEmpty ? "yt-dlp needs a JavaScript runtime (deno) for YouTube." : message)
         }
-        // Note: order matters. "Requested format is not available" is a yt-dlp-is-behind signal (handled below),
-        // not a video-availability problem, so keep the availability needles specific enough to not catch it.
+        // Order matters: availability first, then YouTube-changed signals (incl. HTTP 403/429, which yt-dlp
+        // prefixes with "Unable to download webpage"), then genuine connectivity errors, then unknown.
         if mentions("video unavailable", "private video", "this video is unavailable", "has been removed",
                     "sign in to confirm your age", "age-restricted", "members-only", "not available in your country",
                     "this live event", "premieres in", "unsupported url", "is not a valid url",
@@ -66,16 +66,16 @@ public enum YTDLPDiagnostics {
                     "account has been terminated", "who has blocked it in your country") {
             return .unavailable(message: message.isEmpty ? "This link can't be played." : message)
         }
-        if mentions("unable to download webpage", "nodename nor servname", "network is unreachable",
-                    "temporary failure in name resolution", "urlopen error", "connection reset",
-                    "read timed out", "timed out", "ssl:", "no route to host", "connection refused") {
-            return .network(message: message.isEmpty ? "Network error while contacting YouTube." : message)
-        }
-        if mentions("http error 403", "requested format is not available", "the page needs to be reloaded",
+        if mentions("http error 403", "http error 429", "requested format is not available", "the page needs to be reloaded",
                     "unable to extract", "missing a url", "sabr", "confirm you're not a bot", "confirm you’re not a bot",
                     "please report this issue", "failed to parse json", "po token", "no video formats found",
                     "nsig extraction failed", "unable to download api page") {
             return .outdated(message: message.isEmpty ? "YouTube changed something yt-dlp doesn't handle yet." : message)
+        }
+        if mentions("unable to download webpage", "nodename nor servname", "network is unreachable",
+                    "temporary failure in name resolution", "urlopen error", "connection reset",
+                    "read timed out", "timed out", "ssl:", "no route to host", "connection refused") {
+            return .network(message: message.isEmpty ? "Network error while contacting YouTube." : message)
         }
         return .failed(exitCode: exitCode, message: message)
     }

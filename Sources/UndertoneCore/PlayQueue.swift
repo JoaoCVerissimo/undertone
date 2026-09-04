@@ -15,8 +15,11 @@ public struct PlayQueue: Equatable, Sendable {
         self.title = title ?? entries.first?.playlistTitle
         if let startVideoID, let i = playable.firstIndex(where: { $0.id == startVideoID }) {
             index = i
-        } else if let startIndex, startIndex >= 1, startIndex <= playable.count {
-            index = startIndex - 1
+        } else if let startIndex, startIndex >= 1, startIndex <= entries.count {
+            // `index=` counts positions in the full playlist (private/deleted included); land on the
+            // first playable entry at or after that position.
+            let playableBefore = entries[..<(startIndex - 1)].filter(\.isAvailable).count
+            index = playable.isEmpty ? 0 : min(playableBefore, playable.count - 1)
         } else {
             index = 0
         }

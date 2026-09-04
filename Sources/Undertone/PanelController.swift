@@ -252,6 +252,12 @@ final class PanelController {
             hide()
             return nil
         }
+        // Space toggles playback, but never while typing in a text field.
+        if event.keyCode == 49, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+           !(panel.firstResponder is NSTextView) {
+            engine.togglePlayPause()
+            return nil
+        }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard flags == .command || flags == [.command, .shift], let key = event.charactersIgnoringModifiers?.lowercased() else { return event }
         if key == "q" && flags == .command {

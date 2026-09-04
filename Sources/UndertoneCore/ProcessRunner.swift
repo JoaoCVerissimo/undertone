@@ -18,8 +18,9 @@ public protocol ProcessRunning: Sendable {
     func run(executable: URL, arguments: [String], environment: [String: String], timeout: Duration) async throws -> ProcessResult
 }
 
-/// Runs a subprocess off the main actor, draining both pipes concurrently (yt-dlp's JSON exceeds the 64 KB pipe buffer),
-/// killing it on timeout or task cancellation.
+/// Runs a subprocess off the main actor. Output is accumulated as it arrives (never a blocking read-to-EOF:
+/// a grandchild such as deno can inherit the pipe and keep it open after yt-dlp is killed), the process is
+/// killed on timeout or task cancellation, and the kill is skipped once the child has already exited.
 public struct SystemProcessRunner: ProcessRunning {
     public init() {}
 
@@ -34,10 +35,35 @@ public struct SystemProcessRunner: ProcessRunning {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        let stderrHandle = stderrPipe.fileHandleForReading
+
+        let stdoutBuffer = OSAllocatedUnfairLock(initialState: Data())
+        let stderrBuffer = OSAllocatedUnfairLock(initialState: Data())
+        let stdoutEOF = OSAllocatedUnfairLock(initialState: false)
+        stdoutHandle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                stdoutEOF.withLock { $0 = true }
+                handle.readabilityHandler = nil
+            } else {
+                stdoutBuffer.withLock { $0.append(chunk) }
+            }
+        }
+        stderrHandle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+            } else {
+                stderrBuffer.withLock { $0.append(chunk) }
+            }
+        }
 
         // Buffered stream: the termination handler may fire before we start awaiting.
         let (terminated, continuation) = AsyncStream<Int32>.makeStream()
+        let exited = OSAllocatedUnfairLock(initialState: false)
         process.terminationHandler = { finished in
+            exited.withLock { $0 = true }
             continuation.yield(finished.terminationStatus)
             continuation.finish()
         }
@@ -45,44 +71,42 @@ public struct SystemProcessRunner: ProcessRunning {
         do {
             try process.run()
         } catch {
+            stdoutHandle.readabilityHandler = nil
+            stderrHandle.readabilityHandler = nil
             throw YTDLPFailure.launchFailed(error.localizedDescription)
         }
 
         let pid = process.processIdentifier
-        let stdoutHandle = stdoutPipe.fileHandleForReading
-        let stderrHandle = stderrPipe.fileHandleForReading
         let timedOut = OSAllocatedUnfairLock(initialState: false)
-
         let watchdog = Task.detached {
             try await Task.sleep(for: timeout)
             timedOut.withLock { $0 = true }
-            kill(pid, SIGKILL)
+            if !exited.withLock({ $0 }) { kill(pid, SIGKILL) }
         }
         defer { watchdog.cancel() }
 
         return try await withTaskCancellationHandler {
-            async let stdoutData = Self.drain(stdoutHandle)
-            async let stderrData = Self.drain(stderrHandle)
             var status: Int32 = -1
             for await code in terminated {
                 status = code
                 break
             }
-            let out = await stdoutData
-            let err = await stderrData
+            // Let the readability handlers deliver the tail of stdout (normally immediate), but never wait
+            // on a pipe a lingering grandchild might still hold: cap at ~1 s.
+            var polls = 0
+            while !stdoutEOF.withLock({ $0 }), polls < 50 {
+                try? await Task.sleep(for: .milliseconds(20))
+                polls += 1
+            }
+            stdoutHandle.readabilityHandler = nil
+            stderrHandle.readabilityHandler = nil
+            let out = stdoutBuffer.withLock { $0 }
+            let err = stderrBuffer.withLock { $0 }
             if timedOut.withLock({ $0 }) { throw YTDLPFailure.timedOut }
             if Task.isCancelled { throw YTDLPFailure.cancelled }
             return ProcessResult(exitCode: status, stdout: out, stderr: err)
         } onCancel: {
-            kill(pid, SIGTERM)
-        }
-    }
-
-    private static func drain(_ handle: FileHandle) async -> Data {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: handle.readDataToEndOfFile())
-            }
+            if !exited.withLock({ $0 }) { kill(pid, SIGTERM) }
         }
     }
 }

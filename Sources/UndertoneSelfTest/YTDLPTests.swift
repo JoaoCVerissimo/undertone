@@ -35,6 +35,10 @@ import Testing
         // "Requested format is not available" is an outdated-yt-dlp signal, not an unavailable video (regression).
         #expect(YTDLPDiagnostics.classify(exitCode: 1, stderr: "ERROR: [youtube] x: This video is not available").message == "This video is not available")
         if case .unavailable = YTDLPDiagnostics.classify(exitCode: 1, stderr: "ERROR: [youtube] x: This video is not available") {} else { Issue.record("expected .unavailable for a genuinely unavailable video") }
+        // A 403/429 wrapped in "Unable to download webpage" is a blocked client, not a connectivity problem:
+        // it must be retryable with yt-dlp's default clients, not reported as "check your connection".
+        #expect(YTDLPDiagnostics.classify(exitCode: 1, stderr: "ERROR: Unable to download webpage: HTTP Error 403: Forbidden") == .outdated(message: "Unable to download webpage: HTTP Error 403: Forbidden"))
+        #expect(YTDLPDiagnostics.classify(exitCode: 1, stderr: "ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests").shouldRetryWithDefaultClients)
         #expect(YTDLPDiagnostics.classify(exitCode: 2, stderr: "something odd") == .failed(exitCode: 2, message: "something odd"))
         #expect(YTDLPFailure.outdated(message: "x").shouldRetryWithDefaultClients)
         #expect(!YTDLPFailure.unavailable(message: "x").shouldRetryWithDefaultClients)

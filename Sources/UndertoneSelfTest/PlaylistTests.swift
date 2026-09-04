@@ -40,4 +40,15 @@ import Testing
         #expect(PlayQueue(entries: []).current == nil)
         #expect(PlayQueue(entries: []).position == 0)
     }
+
+    @Test func indexCountsTheFullPlaylistNotJustPlayableEntries() {
+        // Fixture order: available, available, [Private video], available. `index=4` must land on the 4th
+        // entry (the one after the private video), i.e. position 3 of the 3 playable ones.
+        let entries = PlaylistEntry.decodeLines(Data(Fixtures.playlistLines.utf8))
+        let queue = PlayQueue(entries: entries, startIndex: 4)
+        #expect(queue.current?.id == "thirdVideo1")
+        #expect(queue.position == 3)
+        // `index=3` points at the private video itself: land on the next playable one.
+        #expect(PlayQueue(entries: entries, startIndex: 3).current?.id == "thirdVideo1")
+    }
 }

@@ -62,7 +62,7 @@ final class PlayerEngine {
     @ObservationIgnored private var warmTask: Task<Track?, Never>?
     @ObservationIgnored private var warmKey: String?
     @ObservationIgnored private var currentLink: MediaLink?
-    @ObservationIgnored private var pastedURL: URL?
+    @ObservationIgnored private var pastedLink: MediaLink?
     @ObservationIgnored private var recoveredOnce = false
 
     init(settings: AppSettings, service: YTDLPService) {
@@ -107,9 +107,8 @@ final class PlayerEngine {
         prefetchTask?.cancel()
         clearError()
         notice = nil
-        pastedURL = link.original
+        pastedLink = link
         settings.lastLink = link.original.absoluteString
-        settings.recent.record(url: link.original, title: link.original.host() ?? link.original.absoluteString)
         log.notice("open \(link.original.absoluteString, privacy: .public)")
 
         if case .mix = link.kind {
@@ -143,9 +142,7 @@ final class PlayerEngine {
                     throw YTDLPFailure.unavailable(message: "No playable videos in that playlist.")
                 }
                 self.queue = queue
-                if let pastedURL = self.pastedURL {
-                    self.settings.recent.record(url: pastedURL, title: queue.title ?? "Playlist")
-                }
+                self.settings.recent.record(url: link.resolvedURL, title: queue.title ?? "Playlist")
                 self.resolveAndPlay(first.link, startAt: link.startTime)
             } catch {
                 self.handle(error)
@@ -153,19 +150,24 @@ final class PlayerEngine {
         }
     }
 
-    private func resolveAndPlay(_ link: MediaLink, startAt: Double? = nil) {
+    /// - Parameter queueTarget: the queue index this link belongs to. It is committed only once the track
+    ///   loads, so a failed or cancelled Next/Previous leaves the queue and the playing track untouched.
+    private func resolveAndPlay(_ link: MediaLink, startAt: Double? = nil, queueTarget: Int? = nil) {
         resolveTask?.cancel()
-        currentLink = link
         let key = link.cacheKey
 
         if let cached = settings.streamCache.track(forKey: key) {
             log.notice("cache hit \(key, privacy: .public)")
-            load(cached, startAt: startAt)
+            load(cached, link: link, startAt: startAt, queueTarget: queueTarget)
             return
         }
 
         isResolving = true
-        resolvingTitle = queue?.current?.title ?? "Resolving…"
+        if let queueTarget, let q = queue, q.entries.indices.contains(queueTarget) {
+            resolvingTitle = q.entries[queueTarget].title
+        } else {
+            resolvingTitle = queue?.current?.title ?? "Resolving…"
+        }
         let pendingWarmUp: Task<Track?, Never>? = (warmKey == key) ? warmTask : nil
         resolveTask = Task { [weak self] in
             guard let self else { return }
@@ -180,7 +182,7 @@ final class PlayerEngine {
                 }
                 guard let track, !Task.isCancelled else { return }
                 self.settings.streamCache.store(track, forKey: key)
-                self.load(track, startAt: startAt)
+                self.load(track, link: link, startAt: startAt, queueTarget: queueTarget)
             } catch {
                 self.handle(error)
             }
@@ -208,10 +210,14 @@ final class PlayerEngine {
         }
     }
 
-    private func load(_ track: Track, startAt: Double?) {
+    private func load(_ track: Track, link: MediaLink, startAt: Double?, queueTarget: Int?) {
         teardownItem()
+        currentLink = link
+        if let queueTarget, var q = queue {
+            q.jump(to: queueTarget)
+            queue = q
+        }
         self.track = track
-        recoveredOnce = false
         hasEnded = false
         isResolving = false
         resolvingTitle = nil
@@ -233,8 +239,8 @@ final class PlayerEngine {
         }
         play()
 
-        if queue == nil, let pastedURL {
-            settings.recent.record(url: pastedURL, title: track.title)
+        if queue == nil, let pastedLink {
+            settings.recent.record(url: pastedLink.resolvedURL, title: track.title)
         }
         prefetchNext()
     }
@@ -243,7 +249,14 @@ final class PlayerEngine {
         itemStatusTask = Task { [weak self] in
             for await status in item.publisher(for: \.status).values {
                 guard let self else { return }
-                if status == .failed { self.itemFailed(item.error) }
+                switch status {
+                case .readyToPlay:
+                    self.recoveredOnce = false   // healthy again: allow one recovery the next time something breaks
+                case .failed:
+                    self.itemFailed(item.error)
+                default:
+                    break
+                }
             }
         }
         endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
@@ -274,10 +287,17 @@ final class PlayerEngine {
 
     func play() {
         guard let track else {
-            if let last = settings.lastLink { open(last) }
+            // Nothing loaded: replay the last link, unless a resolve is already in flight (a media-key
+            // Play during the first resolve must not kill and re-spawn yt-dlp).
+            if !isResolving, let last = settings.lastLink { open(last) }
             return
         }
         if track.isExpired(), let link = currentLink {
+            guard !recoveredOnce else {
+                fail("The stream expired and could not be refreshed.", suggestion: "Paste the link again.")
+                return
+            }
+            recoveredOnce = true
             log.notice("stream expired; re-resolving")
             settings.streamCache.remove(forKey: link.cacheKey)
             resolveAndPlay(link, startAt: currentTime)
@@ -346,10 +366,9 @@ final class PlayerEngine {
     }
 
     func next() {
-        guard var q = queue, q.hasNext else { return }
-        q.advance()
-        queue = q
-        if let entry = q.current { resolveAndPlay(entry.link) }
+        guard let q = queue, q.hasNext else { return }
+        let target = q.index + 1
+        resolveAndPlay(q.entries[target].link, queueTarget: target)
     }
 
     func previous() {
@@ -357,10 +376,9 @@ final class PlayerEngine {
             seek(to: 0)
             return
         }
-        guard var q = queue else { return }
-        q.goBack()
-        queue = q
-        if let entry = q.current { resolveAndPlay(entry.link) }
+        guard let q = queue, q.hasPrevious else { return }
+        let target = q.index - 1
+        resolveAndPlay(q.entries[target].link, queueTarget: target)
     }
 
     func cancelResolving() {
@@ -411,18 +429,16 @@ final class PlayerEngine {
         case .one:
             restartCurrentTrack()
         case .all:
-            if var q = queue {
-                if q.hasNext { q.advance() } else { q.jump(to: 0) }
-                queue = q
-                if let entry = q.current { resolveAndPlay(entry.link) }
+            if let q = queue, !q.isEmpty {
+                let target = q.hasNext ? q.index + 1 : 0
+                resolveAndPlay(q.entries[target].link, queueTarget: target)
             } else {
                 restartCurrentTrack()
             }
         case .off:
-            if var q = queue, q.hasNext {
-                q.advance()
-                queue = q
-                if let entry = q.current { resolveAndPlay(entry.link) }
+            if let q = queue, q.hasNext {
+                let target = q.index + 1
+                resolveAndPlay(q.entries[target].link, queueTarget: target)
             } else {
                 hasEnded = true
                 if let d = duration { currentTime = d }
@@ -465,11 +481,12 @@ final class PlayerEngine {
     }
 
     private func handle(_ error: Error) {
+        // A resolve cancelled by a newer one (Next pressed twice, a new link pasted) must not touch the
+        // state the newer one just set. cancelResolving() resets the flags itself for the explicit case.
+        if error is CancellationError || (error as? YTDLPFailure) == .cancelled { return }
         isResolving = false
         resolvingTitle = nil
-        if error is CancellationError { return }
         if let failure = error as? YTDLPFailure {
-            if failure == .cancelled { return }
             fail(failure.message, suggestion: failure.suggestion)
         } else {
             fail(error.localizedDescription, suggestion: nil)
