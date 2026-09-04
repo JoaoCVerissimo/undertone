@@ -1,0 +1,16 @@
+import Foundation
+
+enum Fixtures {
+    /// Trimmed real `yt-dlp -j` output (yt-dlp 2026.08.19, format 140 via the visionos client).
+    static let videoJSON = """
+    {"id": "aqz-KE-bpKQ", "title": "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film", "thumbnail": "https://i.ytimg.com/vi_webp/aqz-KE-bpKQ/maxresdefault.webp", "description": "…", "channel_id": "UCSMOQeBJ2RAnuFungnQOxLg", "channel_url": "https://www.youtube.com/channel/UCSMOQeBJ2RAnuFungnQOxLg", "duration": 635, "view_count": 20469130, "age_limit": 0, "webpage_url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ", "categories": ["Film & Animation"], "playable_in_embed": true, "live_status": "not_live", "channel": "Blender", "channel_follower_count": 1240000, "uploader": "Blender", "uploader_id": "@BlenderOfficial", "upload_date": "20141110", "timestamp": 1415628355, "availability": "public", "extractor": "youtube", "extractor_key": "Youtube", "display_id": "aqz-KE-bpKQ", "fulltitle": "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film", "duration_string": "10:35", "is_live": false, "was_live": false, "epoch": 1788542467, "asr": 44100, "filesize": 10285173, "format_id": "140", "format_note": "medium", "source_preference": -1, "audio_channels": 2, "quality": 3.0, "has_drm": false, "tbr": 129.481, "language": "en", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "container": "m4a_dash", "url": "https://rr3---sn-h5qzen7s.googlevideo.com/videoplayback?expire=1788564066&ei=Av6aasuCMeew8uMP5IWkgAo&ip=2001%3A818%3Ae317&id=o-AAZax0qxJgzELlcHJfwN-kAI2nJfewQJY2AznFwdd5NC&itag=140&source=youtube&requiressl=yes&mime=audio%2Fmp4&dur=634.624&c=VISIONOS&sig=abc", "protocol": "https", "video_ext": "none", "audio_ext": "m4a", "abr": 129.481, "resolution": "audio only", "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-us,en;q=0.5", "Sec-Fetch-Mode": "navigate"}, "format": "140 - audio only (medium)", "_type": "video"}
+    """
+
+    static let playlistLines = """
+    {"_type": "url", "ie_key": "Youtube", "id": "JXm0-ilIknE", "url": "https://www.youtube.com/watch?v=JXm0-ilIknE", "title": "Keynote — Blender Conference 2025", "duration": 1508, "channel": "Blender", "playlist_title": "Blender Conference 2025", "playlist_id": "PLa1F2ddGya_8u-HEvmfCVuS_OImW8HaLd", "playlist_index": 1}
+    {"_type": "url", "ie_key": "Youtube", "id": "hFzg41j68hg", "url": "https://www.youtube.com/watch?v=hFzg41j68hg", "title": "Compositing 5.0: Powerful yet Simple", "duration": 1248, "channel": "Blender", "playlist_title": "Blender Conference 2025", "playlist_id": "PLa1F2ddGya_8u-HEvmfCVuS_OImW8HaLd", "playlist_index": 2}
+    {"_type": "url", "ie_key": "Youtube", "id": "privateXXXX", "url": "https://www.youtube.com/watch?v=privateXXXX", "title": "[Private video]", "duration": null, "channel": null, "playlist_title": "Blender Conference 2025", "playlist_id": "PLa1F2ddGya_8u-HEvmfCVuS_OImW8HaLd", "playlist_index": 3}
+    not json at all
+    {"_type": "url", "ie_key": "Youtube", "id": "thirdVideo1", "title": "Third", "duration": 60, "playlist_title": "Blender Conference 2025", "playlist_id": "PLa1F2ddGya_8u-HEvmfCVuS_OImW8HaLd", "playlist_index": 4}
+    """
+}

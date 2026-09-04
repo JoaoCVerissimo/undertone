@@ -1,0 +1,11 @@
+.build/
+build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+.DS_Store
+DerivedData/
+
+# App bundle output and SwiftPM build dirs are already ignored above.
+# Vendored dependency SOURCE is committed (Vendor/); its build output is not.
+Vendor/*/.build/

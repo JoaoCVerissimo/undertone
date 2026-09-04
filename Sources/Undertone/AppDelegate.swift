@@ -1,0 +1,77 @@
+import AppKit
+import UndertoneCore
+import os
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var settings: AppSettings!
+    private var service: YTDLPService!
+    private var engine: PlayerEngine!
+    private var nowPlaying: NowPlayingBridge!
+    private var panel: PanelController!
+    private var statusItem: StatusItemController!
+    private let log = Logger(subsystem: "com.jverissimo.undertone", category: "app")
+
+    private var pendingURLs: [URL] = []
+    private var isReady = false
+
+    // Set up in *will*FinishLaunching: Launch Services can deliver `application(_:open:)` before didFinishLaunching.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        MainMenu.install()
+        settings = AppSettings()
+        service = YTDLPService(settings: settings)
+        engine = PlayerEngine(settings: settings, service: service)
+        nowPlaying = NowPlayingBridge(engine: engine)
+        panel = PanelController(settings: settings, engine: engine, service: service)
+        statusItem = StatusItemController(engine: engine, panel: panel, settings: settings)
+        Hotkeys.install(engine: engine, panel: panel)
+        Task { await service.refresh() }
+        isReady = true
+        log.notice("launched from \(Bundle.main.bundleURL.path, privacy: .public)")
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let queued = pendingURLs
+        pendingURLs.removeAll()
+        for url in queued { handle(url) }
+    }
+
+    /// `undertone://play?url=…`, `undertone://play`, `undertone://pause`, `undertone://toggle`, `undertone://next`, `undertone://open`
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard isReady else {
+            pendingURLs.append(contentsOf: urls)
+            return
+        }
+        for url in urls { handle(url) }
+    }
+
+    private func handle(_ url: URL) {
+        guard url.scheme == "undertone", let engine, let panel else { return }
+        log.notice("url \(url.absoluteString, privacy: .public)")
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        switch url.host() {
+        case "play":
+            if let target = query.first(where: { $0.name == "url" })?.value, !target.isEmpty {
+                engine.open(target)
+            } else {
+                engine.play()
+            }
+        case "pause": engine.pause()
+        case "toggle": engine.togglePlayPause()
+        case "next": engine.next()
+        case "previous": engine.previous()
+        case "speed":
+            if let raw = query.first(where: { $0.name == "value" })?.value, let value = Double(raw), let speed = PlaybackSpeed(rawValue: value) {
+                engine.setSpeed(speed)
+            } else {
+                engine.cycleSpeed()
+            }
+        case "open": panel.show()
+        case "quit": NSApp.terminate(nil)
+        default: log.notice("unknown URL \(url.absoluteString, privacy: .public)")
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        engine.shutdown()
+    }
+}
