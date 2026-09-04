@@ -21,6 +21,9 @@ BIN="$(swift build -c "$CONFIG" --product "$APP" --show-bin-path)/$APP"
 echo "▸ assembling $OUT (v$VERSION build $BUILD_NUMBER)"
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
+# Keep Spotlight from indexing this throwaway build copy as a second "Undertone" app
+# (the real install lives in /Applications). Harmless marker file Spotlight honours.
+touch build/.metadata_never_index
 cp "$BIN" "$OUT/Contents/MacOS/$APP"
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD_NUMBER/g" Resources/Info.plist > "$OUT/Contents/Info.plist"
 printf 'APPL????' > "$OUT/Contents/PkgInfo"
