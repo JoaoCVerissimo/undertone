@@ -50,9 +50,15 @@ final class AppSettings {
         static let repeatMode = "repeatMode"
         static let showTitle = "showTitleInMenuBar"
         static let streamCache = "streamCache"
+        static let ytdlpCachedPath = "ytdlpCachedPath"
+        static let ytdlpCachedDeno = "ytdlpCachedDeno"
+        static let ytdlpCachedVersion = "ytdlpCachedVersion"
+        static let ytdlpProbedAt = "ytdlpProbedAt"
+        static let idleUnloadSeconds = "idleUnloadSeconds"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var persistCacheTask: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -69,6 +75,11 @@ final class AppSettings {
         repeatMode = RepeatMode(rawValue: defaults.string(forKey: Keys.repeatMode) ?? "") ?? .off
         showTitleInMenuBar = defaults.bool(forKey: Keys.showTitle)
         streamCache = StreamCache(decoding: defaults.data(forKey: Keys.streamCache) ?? Data())
+        ytdlpCachedPath = defaults.string(forKey: Keys.ytdlpCachedPath)
+        ytdlpCachedDeno = defaults.string(forKey: Keys.ytdlpCachedDeno)
+        ytdlpCachedVersion = defaults.string(forKey: Keys.ytdlpCachedVersion)
+        ytdlpProbedAt = defaults.object(forKey: Keys.ytdlpProbedAt) as? Date
+        idleUnloadSeconds = defaults.object(forKey: Keys.idleUnloadSeconds) as? Double ?? 10 * 60
     }
 
     /// `nil` means plain, untinted glass. Stored as "" so the default tint is not re-applied on next launch.
@@ -106,7 +117,38 @@ final class AppSettings {
         didSet { defaults.set(showTitleInMenuBar, forKey: Keys.showTitle) }
     }
     /// Resolved streams survive relaunches (they stay valid for ~6 h), so recent replays are instant.
+    /// The blob is re-encoded on a short debounce, not on every mutation (stores come in bursts).
     var streamCache: StreamCache {
-        didSet { defaults.set((try? streamCache.encoded()) ?? Data(), forKey: Keys.streamCache) }
+        didSet {
+            persistCacheTask?.cancel()
+            persistCacheTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, !Task.isCancelled else { return }
+                self.flushStreamCache()
+            }
+        }
+    }
+
+    /// Writes any pending stream-cache change immediately (called on quit).
+    func flushStreamCache() {
+        persistCacheTask?.cancel()
+        defaults.set((try? streamCache.encoded()) ?? Data(), forKey: Keys.streamCache)
+    }
+    /// Last successful yt-dlp probe, so a normal launch spawns no processes at all.
+    var ytdlpCachedPath: String? {
+        didSet { defaults.set(ytdlpCachedPath, forKey: Keys.ytdlpCachedPath) }
+    }
+    var ytdlpCachedDeno: String? {
+        didSet { defaults.set(ytdlpCachedDeno, forKey: Keys.ytdlpCachedDeno) }
+    }
+    var ytdlpCachedVersion: String? {
+        didSet { defaults.set(ytdlpCachedVersion, forKey: Keys.ytdlpCachedVersion) }
+    }
+    var ytdlpProbedAt: Date? {
+        didSet { defaults.set(ytdlpProbedAt, forKey: Keys.ytdlpProbedAt) }
+    }
+    /// How long a paused track sits before the media pipeline is released (`defaults write … idleUnloadSeconds`).
+    var idleUnloadSeconds: Double {
+        didSet { defaults.set(idleUnloadSeconds, forKey: Keys.idleUnloadSeconds) }
     }
 }

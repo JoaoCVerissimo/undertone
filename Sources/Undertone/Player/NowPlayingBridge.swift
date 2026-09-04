@@ -85,7 +85,7 @@ final class NowPlayingBridge {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: track.title,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: engine.currentTime,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: engine.livePosition,
             MPNowPlayingInfoPropertyPlaybackRate: (engine.isPlaying && !engine.isBuffering) ? engine.speed.rawValue : 0,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: engine.speed.rawValue,
         ]

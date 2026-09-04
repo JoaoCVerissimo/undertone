@@ -72,7 +72,7 @@ public struct Track: Equatable, Sendable, Identifiable, Codable {
             streamURL: streamURL,
             streamExtension: info.ext,
             audioCodec: info.acodec,
-            httpHeaders: info.httpHeaders ?? [:],
+            httpHeaders: (info.httpHeaders ?? [:]).filter { $0.key == "User-Agent" },   // the only one used
             expiresAt: expiry(from: streamURL),
             extractor: info.extractor
         )

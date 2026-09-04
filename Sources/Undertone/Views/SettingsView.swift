@@ -10,6 +10,7 @@ struct SettingsView: View {
     @Environment(YTDLPService.self) private var service
     @Environment(PanelState.self) private var state
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
+    @State private var loginRequiresApproval = LaunchAtLogin.status == .requiresApproval
     @State private var loginError: String?
 
     var body: some View {
@@ -70,6 +71,7 @@ struct SettingsView: View {
                         do {
                             try LaunchAtLogin.set(enabled)
                             loginError = nil
+                            loginRequiresApproval = LaunchAtLogin.status == .requiresApproval
                         } catch {
                             loginError = error.localizedDescription
                             launchAtLogin = LaunchAtLogin.isEnabled
@@ -80,7 +82,7 @@ struct SettingsView: View {
                 } else if !LaunchAtLogin.isInApplications {
                     Text("Tip: install to /Applications first so the login item survives rebuilds.").font(.caption2).foregroundStyle(.tertiary)
                 }
-                if LaunchAtLogin.status == .requiresApproval {
+                if loginRequiresApproval {
                     Button("Approve in System Settings…") { LaunchAtLogin.openSystemSettings() }.controlSize(.mini)
                 }
                 if let loginError {
@@ -102,7 +104,7 @@ struct SettingsView: View {
                     Spacer(minLength: 0)
                 }
                 HStack {
-                    Button("Recheck") { Task { await service.refresh(rereadLoginPath: true) } }
+                    Button("Recheck") { service.recheck() }
                     Button("Choose…") { choosePath() }
                     if settings.ytdlpPathOverride != nil {
                         Button("Use default") { service.setOverride(nil) }
@@ -124,7 +126,10 @@ struct SettingsView: View {
             }
         }
         .padding(16)
-        .onChange(of: state.showCount) { _, _ in launchAtLogin = LaunchAtLogin.isEnabled }
+        .onChange(of: state.showCount) { _, _ in
+            launchAtLogin = LaunchAtLogin.isEnabled
+            loginRequiresApproval = LaunchAtLogin.status == .requiresApproval
+        }
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

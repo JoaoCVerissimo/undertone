@@ -47,6 +47,13 @@ final class YTDLPService {
         refreshTask = Task { await refresh() }
     }
 
+    /// Recheck (or path change): replaces any probe in flight so `readyClient()` waits for the new result
+    /// and repeated clicks never run concurrent probes.
+    func recheck(rereadLoginPath: Bool = true) {
+        refreshTask?.cancel()
+        refreshTask = Task { await refresh(rereadLoginPath: rereadLoginPath) }
+    }
+
     /// The client, waiting for the first probe to finish if it is still running. This is what callers
     /// should use so a link opened right after launch waits for yt-dlp instead of failing "not installed".
     func readyClient() async -> YTDLPClient? {
@@ -66,6 +73,27 @@ final class YTDLPService {
     func refresh(rereadLoginPath: Bool = false) async {
         status = .checking
         let home = NSHomeDirectory()
+
+        // Fast path: reuse a recent, still-valid probe so a normal launch (incl. launch-at-login) spawns
+        // nothing. Recheck, a path override, an outdated cached version, or a stale (>24 h) probe skip it.
+        if !rereadLoginPath, settings.ytdlpPathOverride == nil,
+           let cachedPath = settings.ytdlpCachedPath, FileManager.default.isExecutableFile(atPath: cachedPath),
+           let probedAt = settings.ytdlpProbedAt, Date().timeIntervalSince(probedAt) < 24 * 3600,
+           let cachedVersion = settings.ytdlpCachedVersion.flatMap(YTDLPVersion.init),
+           cachedVersion >= YTDLPVersion.minimumRecommended {
+            searchPath = ToolPaths.mergedPATH(home: home, loginPATH: cachedLoginPATH, currentPATH: ProcessInfo.processInfo.environment["PATH"])
+            environment = ToolPaths.environment(home: home, path: searchPath)
+            executable = URL(fileURLWithPath: cachedPath)
+            if let deno = settings.ytdlpCachedDeno, FileManager.default.isExecutableFile(atPath: deno) {
+                jsRuntime = URL(fileURLWithPath: deno)
+            } else {
+                jsRuntime = ToolPaths.locate("deno", in: searchPath)
+            }
+            status = .ready(cachedVersion)
+            log.notice("yt-dlp \(cachedVersion.description, privacy: .public) at \(cachedPath, privacy: .public) (cached probe, no processes spawned)")
+            return
+        }
+
         if cachedLoginPATH == nil || rereadLoginPath { cachedLoginPATH = await Self.loginShellPATH() }
         searchPath = ToolPaths.mergedPATH(home: home, loginPATH: cachedLoginPATH, currentPATH: ProcessInfo.processInfo.environment["PATH"])
         environment = ToolPaths.environment(home: home, path: searchPath)
@@ -90,8 +118,13 @@ final class YTDLPService {
         do {
             let version = try await makeClient(executable).version()
             status = version < YTDLPVersion.minimumRecommended ? .outdated(version) : .ready(version)
+            settings.ytdlpCachedPath = executable.path
+            settings.ytdlpCachedDeno = jsRuntime?.path
+            settings.ytdlpCachedVersion = version.description
+            settings.ytdlpProbedAt = Date()
             log.notice("yt-dlp \(version.description, privacy: .public) at \(executable.path, privacy: .public); deno: \(self.jsRuntime?.path ?? "none", privacy: .public)")
         } catch {
+            if Task.isCancelled || (error as? YTDLPFailure) == .cancelled { return }   // superseded by a newer probe
             let message = (error as? YTDLPFailure)?.message ?? error.localizedDescription
             status = .broken(message)
             log.error("yt-dlp probe failed: \(message, privacy: .public)")
@@ -100,7 +133,7 @@ final class YTDLPService {
 
     func setOverride(_ path: String?) {
         settings.ytdlpPathOverride = path
-        Task { await refresh() }
+        recheck(rereadLoginPath: false)
     }
 
     private func makeClient(_ executable: URL) -> YTDLPClient {

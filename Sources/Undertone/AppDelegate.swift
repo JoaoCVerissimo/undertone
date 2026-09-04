@@ -85,5 +85,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         engine.shutdown()
+        settings.flushStreamCache()
     }
 }

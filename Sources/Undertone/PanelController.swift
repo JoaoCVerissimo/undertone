@@ -93,8 +93,7 @@ final class PanelController {
 
     func show() {
         guard let button = statusButton else { return }
-        if settings.backdrop == .glass { rebuildBackdrop() } // fresh backdrop each time (works around a stale-glass bug seen on 26.2)
-        applyAppearance()
+        if settings.backdrop == .glass { rebuildBackdrop() } else { applyAppearance() }   // rebuild works around a stale-glass bug seen on 26.2
         state.showingSettings = false
         state.prefillFromClipboard(currentLink: settings.lastLink)
         if !state.urlText.isEmpty { engine.warm(state.urlText) }
@@ -109,11 +108,13 @@ final class PanelController {
         }
         installMonitors()
         isVisible = true
+        engine.setProgressTracking(true)
     }
 
     func hide() {
         guard isVisible else { return }
         isVisible = false
+        engine.setProgressTracking(false)
         removeMonitors()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.1

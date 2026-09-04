@@ -28,8 +28,20 @@ final class PlayerEngine {
     var volume: Float {
         didSet {
             player.volume = isMuted ? 0 : volume
-            settings.volume = Double(volume)
+            persistVolumeTask?.cancel()
+            persistVolumeTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard let self, !Task.isCancelled else { return }
+                self.settings.volume = Double(self.volume)
+            }
         }
+    }
+
+    /// The player's real position right now. `currentTime` is only kept fresh while the panel is visible.
+    var livePosition: Double {
+        guard player.currentItem != nil else { return currentTime }
+        let t = player.currentTime()
+        return t.isNumeric ? t.seconds : currentTime
     }
 
     /// What the slider shows: 0 while muted.
@@ -58,12 +70,30 @@ final class PlayerEngine {
     @ObservationIgnored private var itemStatusTask: Task<Void, Never>?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var resolveTask: Task<Void, Never>?
-    @ObservationIgnored private var prefetchTask: Task<Void, Never>?
-    @ObservationIgnored private var warmTask: Task<Track?, Never>?
-    @ObservationIgnored private var warmKey: String?
+    /// Speculative resolves (clipboard warm-up, next playlist entry) keyed by cache key. A user resolve
+    /// for the same link joins the in-flight task instead of spawning a second yt-dlp.
+    @ObservationIgnored private var backgroundResolves: [String: Task<Track?, Never>] = [:]
+    @ObservationIgnored private var backgroundOwners: [String: Int] = [:]
+    @ObservationIgnored private var backgroundGeneration = 0
+    /// Queue index a navigation is heading for while its resolve is in flight (committed in `load`).
+    @ObservationIgnored private var pendingQueueTarget: Int?
+    @ObservationIgnored private var consecutiveQueueSkips = 0
     @ObservationIgnored private var currentLink: MediaLink?
     @ObservationIgnored private var pastedLink: MediaLink?
-    @ObservationIgnored private var recoveredOnce = false
+    @ObservationIgnored private var recoveryAttempts = 0
+    @ObservationIgnored private var lastLoadedKey: String?
+    @ObservationIgnored private var progressTracking = false
+    @ObservationIgnored private var idleUnloadTask: Task<Void, Never>?
+    @ObservationIgnored private var isIdleUnloaded = false
+    @ObservationIgnored private var persistVolumeTask: Task<Void, Never>?
+    @ObservationIgnored private var stateSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var failedWarmKeys: [String: Date] = [:]
+    /// Unavailable playlist entries skipped in a row before giving up (avoids marching through a dead playlist).
+    static let maxConsecutiveSkips = 5
+    /// Automatic re-resolves (expired URL, failed item) allowed per loaded track before giving up.
+    static let maxRecoveries = 2
+    // After `settings.idleUnloadSeconds` paused (default 10 min), the media pipeline is released so a
+    // forgotten Undertone costs nothing.
 
     init(settings: AppSettings, service: YTDLPService) {
         self.settings = settings
@@ -76,13 +106,6 @@ final class PlayerEngine {
         player.actionAtItemEnd = .pause
         player.automaticallyWaitsToMinimizeStalling = true
 
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 2), queue: .main) { [weak self] time in
-            MainActor.assumeIsolated {
-                guard let self, time.isNumeric else { return }
-                self.currentTime = time.seconds
-                self.syncPlaybackState()
-            }
-        }
         playerStateTask = Task { [weak self] in
             guard let player = self?.player else { return }
             for await _ in player.publisher(for: \.timeControlStatus).values {
@@ -104,7 +127,7 @@ final class PlayerEngine {
 
     func open(_ link: MediaLink) {
         resolveTask?.cancel()
-        prefetchTask?.cancel()
+        cancelBackgroundResolves(except: link.cacheKey)   // a warm-up/prefetch for anything else is wasted work now
         clearError()
         notice = nil
         pastedLink = link
@@ -163,18 +186,19 @@ final class PlayerEngine {
         }
 
         isResolving = true
+        pendingQueueTarget = queueTarget
         if let queueTarget, let q = queue, q.entries.indices.contains(queueTarget) {
             resolvingTitle = q.entries[queueTarget].title
         } else {
             resolvingTitle = queue?.current?.title ?? "Resolving…"
         }
-        let pendingWarmUp: Task<Track?, Never>? = (warmKey == key) ? warmTask : nil
+        let inFlight = backgroundResolves[key]
         resolveTask = Task { [weak self] in
             guard let self else { return }
             do {
                 var track: Track?
-                if let pendingWarmUp {
-                    track = await pendingWarmUp.value   // the clipboard warm-up is already fetching this one
+                if let inFlight {
+                    track = await inFlight.value   // a warm-up or prefetch is already fetching this one
                 }
                 if track == nil {
                     guard let client = await self.service.readyClient() else { self.handle(YTDLPFailure.notInstalled); return }
@@ -192,27 +216,61 @@ final class PlayerEngine {
     /// Resolves a pasted/clipboard link in the background so pressing Play afterwards is instant.
     /// Debounced, deduplicated by cache key, and invisible to the UI.
     func warm(_ text: String) {
-        guard let link = LinkParser.parse(text), !link.isPlaylist, let client = service.client else { return }
+        // Only complete YouTube video links: a partially typed URL must not spawn yt-dlp on every pause.
+        guard let link = LinkParser.parse(text), link.videoID != nil, !link.isPlaylist else { return }
         let key = link.cacheKey
-        guard key != track?.id, !settings.streamCache.contains(key), warmKey != key else { return }
-        warmTask?.cancel()
-        warmKey = key
-        warmTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled, let track = try? await client.resolve(link), !Task.isCancelled else {
-                if self?.warmKey == key { self?.warmKey = nil }
+        guard key != track?.id else { return }
+        // A link that just failed (a private video on the clipboard) is not retried on every panel open.
+        if let failedAt = failedWarmKeys[key], Date().timeIntervalSince(failedAt) < 10 * 60 { return }
+        backgroundResolve(link, delay: .milliseconds(700), isWarmUp: true)
+    }
+
+    /// One speculative yt-dlp at a time, never started beside a user resolve, cached on success.
+    private func backgroundResolve(_ link: MediaLink, delay: Duration, isWarmUp: Bool) {
+        let key = link.cacheKey
+        guard backgroundResolves[key] == nil, backgroundResolves.isEmpty, !isResolving,
+              !settings.streamCache.contains(key), let client = service.client else { return }
+        backgroundGeneration += 1
+        let generation = backgroundGeneration
+        backgroundOwners[key] = generation
+        backgroundResolves[key] = Task { [weak self] in
+            defer {
+                if self?.backgroundOwners[key] == generation {
+                    self?.backgroundResolves[key] = nil
+                    self?.backgroundOwners[key] = nil
+                }
+            }
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, self?.isResolving == false else { return nil }
+            guard let track = try? await client.resolve(link), !Task.isCancelled else {
+                if !Task.isCancelled, isWarmUp { self?.failedWarmKeys[key] = Date() }
                 return nil
             }
             self?.settings.streamCache.store(track, forKey: key)
-            if self?.warmKey == key { self?.warmKey = nil }
-            self?.log.notice("warmed \(key, privacy: .public)")
+            self?.log.notice("\(isWarmUp ? "warmed" : "prefetched", privacy: .public) \(key, privacy: .public)")
             return track
+        }
+    }
+
+    private func cancelBackgroundResolves(except keep: String? = nil) {
+        for (key, task) in backgroundResolves where key != keep {
+            task.cancel()
+            backgroundResolves[key] = nil
+            backgroundOwners[key] = nil
         }
     }
 
     private func load(_ track: Track, link: MediaLink, startAt: Double?, queueTarget: Int?) {
         teardownItem()
+        idleUnloadTask?.cancel()
+        isIdleUnloaded = false
+        if lastLoadedKey != link.cacheKey {
+            recoveryAttempts = 0            // a genuinely new track gets a fresh recovery budget
+            lastLoadedKey = link.cacheKey
+        }
         currentLink = link
+        pendingQueueTarget = nil
+        consecutiveQueueSkips = 0
         if let queueTarget, var q = queue {
             q.jump(to: queueTarget)
             queue = q
@@ -228,6 +286,8 @@ final class PlayerEngine {
         if let userAgent = track.userAgent { options[AVURLAssetHTTPUserAgentKey] = userAgent }
         let asset = AVURLAsset(url: track.streamURL, options: options)
         let item = AVPlayerItem(asset: asset)
+        // Measured on an M1: the pitch algorithm makes no CPU difference at 2× (spectral 4.5% vs timeDomain
+        // 4.4% of one core; decoding twice the samples dominates), so keep the higher-quality one.
         item.audioTimePitchAlgorithm = .spectral
         if let d = track.duration, d > 0 {
             item.forwardPlaybackEndTime = CMTime(seconds: d, preferredTimescale: 600)
@@ -249,14 +309,7 @@ final class PlayerEngine {
         itemStatusTask = Task { [weak self] in
             for await status in item.publisher(for: \.status).values {
                 guard let self else { return }
-                switch status {
-                case .readyToPlay:
-                    self.recoveredOnce = false   // healthy again: allow one recovery the next time something breaks
-                case .failed:
-                    self.itemFailed(item.error)
-                default:
-                    break
-                }
+                if status == .failed { self.itemFailed(item.error) }
             }
         }
         endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
@@ -279,8 +332,66 @@ final class PlayerEngine {
         if playing != isPlaying {
             isPlaying = playing
             log.notice("playback \(playing ? "playing" : "paused", privacy: .public) rate \(self.player.rate)")
+            if playing {
+                idleUnloadTask?.cancel()
+                idleUnloadTask = nil
+            } else if track != nil, !isIdleUnloaded {
+                scheduleIdleUnload()
+            }
         }
         if buffering != isBuffering { isBuffering = buffering }
+    }
+
+    /// KVO on `timeControlStatus` is the primary signal; this catches up shortly after our own transport
+    /// calls in case a change is coalesced, without any periodic timer.
+    private func scheduleStateSync() {
+        stateSyncTask?.cancel()
+        stateSyncTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            self?.syncPlaybackState()
+        }
+    }
+
+    /// The scrubber needs a 2 Hz clock only while the panel is visible. Hidden (the usual state for a
+    /// background player) nothing ticks and nothing re-renders.
+    func setProgressTracking(_ enabled: Bool) {
+        guard enabled != progressTracking else { return }
+        progressTracking = enabled
+        if enabled {
+            currentTime = livePosition
+            timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 2), queue: .main) { [weak self] time in
+                MainActor.assumeIsolated {
+                    guard let self, time.isNumeric else { return }
+                    self.currentTime = time.seconds
+                    self.syncPlaybackState()
+                }
+            }
+        } else if let timeObserver {
+            player.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+    }
+
+    private func scheduleIdleUnload() {
+        idleUnloadTask?.cancel()
+        let delay = max(30, settings.idleUnloadSeconds)
+        idleUnloadTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, !self.isPlaying, self.track != nil, !self.isIdleUnloaded else { return }
+            self.unloadForIdle()
+        }
+    }
+
+    /// Releases the AVPlayerItem after a long pause: no buffering, no media pipeline, back to idle memory.
+    /// Track, queue and position stay; Play rebuilds it (instant on a cache hit).
+    private func unloadForIdle() {
+        let position = livePosition
+        teardownItem()
+        player.replaceCurrentItem(with: nil)
+        currentTime = position
+        isIdleUnloaded = true
+        log.notice("idle: released the player item after a long pause at \(Int(position))s")
     }
 
     // MARK: - Transport
@@ -292,15 +403,21 @@ final class PlayerEngine {
             if !isResolving, let last = settings.lastLink { open(last) }
             return
         }
+        if isIdleUnloaded, let link = currentLink {
+            isIdleUnloaded = false
+            if hasEnded { hasEnded = false; currentTime = 0 }
+            resolveAndPlay(link, startAt: currentTime)   // cache hit → instant; expired → re-resolve
+            return
+        }
         if track.isExpired(), let link = currentLink {
-            guard !recoveredOnce else {
+            guard recoveryAttempts < Self.maxRecoveries else {
                 fail("The stream expired and could not be refreshed.", suggestion: "Paste the link again.")
                 return
             }
-            recoveredOnce = true
+            recoveryAttempts += 1
             log.notice("stream expired; re-resolving")
             settings.streamCache.remove(forKey: link.cacheKey)
-            resolveAndPlay(link, startAt: currentTime)
+            resolveAndPlay(link, startAt: livePosition)
             return
         }
         if hasEnded {
@@ -310,10 +427,12 @@ final class PlayerEngine {
         }
         player.defaultRate = Float(speed.rawValue)
         player.play()
+        scheduleStateSync()
     }
 
     func pause() {
         player.pause()
+        scheduleStateSync()
     }
 
     func togglePlayPause() {
@@ -325,6 +444,7 @@ final class PlayerEngine {
         settings.speed = newSpeed
         player.defaultRate = Float(newSpeed.rawValue)
         if isPlaying { player.rate = Float(newSpeed.rawValue) }
+        scheduleStateSync()
     }
 
     func cycleSpeed() {
@@ -357,42 +477,56 @@ final class PlayerEngine {
         let target = max(0, min(seconds, upper))
         currentTime = target
         hasEnded = false
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        if !isIdleUnloaded {
+            player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         seekGeneration += 1
     }
 
     func skip(by delta: Double) {
-        seek(to: currentTime + delta)
+        seek(to: livePosition + delta)
     }
 
     func next() {
-        guard let q = queue, q.hasNext else { return }
-        let target = q.index + 1
+        guard let q = queue else { return }
+        // Step from the entry we are heading for, so Next after a failed or still-resolving entry moves on.
+        let target = (pendingQueueTarget ?? q.index) + 1
+        guard q.entries.indices.contains(target) else { return }
         resolveAndPlay(q.entries[target].link, queueTarget: target)
     }
 
     func previous() {
-        if currentTime > 3 || queue?.hasPrevious != true {
+        guard let q = queue else {
             seek(to: 0)
             return
         }
-        guard let q = queue, q.hasPrevious else { return }
-        let target = q.index - 1
+        if pendingQueueTarget == nil, livePosition > 3 {
+            seek(to: 0)
+            return
+        }
+        let target = (pendingQueueTarget ?? q.index) - 1
+        guard q.entries.indices.contains(target) else {
+            seek(to: 0)
+            return
+        }
         resolveAndPlay(q.entries[target].link, queueTarget: target)
     }
 
     func cancelResolving() {
         resolveTask?.cancel()
         resolveTask = nil
+        pendingQueueTarget = nil
         isResolving = false
         resolvingTitle = nil
     }
 
     func stop() {
         resolveTask?.cancel()
-        prefetchTask?.cancel()
-        warmTask?.cancel()
-        warmKey = nil
+        cancelBackgroundResolves()
+        pendingQueueTarget = nil
+        idleUnloadTask?.cancel()
+        isIdleUnloaded = false
+        failedWarmKeys.removeAll()
         teardownItem()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -453,15 +587,16 @@ final class PlayerEngine {
         player.defaultRate = Float(speed.rawValue)
         player.play()
         seekGeneration += 1
+        scheduleStateSync()
     }
 
     private func itemFailed(_ error: Error?) {
         let description = error?.localizedDescription ?? "unknown error"
         log.error("item failed: \(description, privacy: .public)")
-        if !recoveredOnce, let link = currentLink {
-            recoveredOnce = true
+        if recoveryAttempts < Self.maxRecoveries, let link = currentLink {
+            recoveryAttempts += 1
             settings.streamCache.remove(forKey: link.cacheKey)
-            let position = currentTime
+            let position = livePosition
             resolveAndPlay(link, startAt: position > 1 ? position : nil)
         } else {
             fail("Playback failed: \(description)", suggestion: "Try again. If it keeps failing: brew upgrade yt-dlp")
@@ -469,15 +604,8 @@ final class PlayerEngine {
     }
 
     private func prefetchNext() {
-        prefetchTask?.cancel()
-        guard let nextEntry = queue?.next, let client = service.client else { return }
-        let key = nextEntry.link.cacheKey
-        guard !settings.streamCache.contains(key) else { return }
-        prefetchTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, let track = try? await client.resolve(nextEntry.link), !Task.isCancelled else { return }
-            self?.settings.streamCache.store(track, forKey: key)
-        }
+        guard let nextEntry = queue?.next else { return }
+        backgroundResolve(nextEntry.link, delay: .seconds(2), isWarmUp: false)
     }
 
     private func handle(_ error: Error) {
@@ -486,6 +614,16 @@ final class PlayerEngine {
         if error is CancellationError || (error as? YTDLPFailure) == .cancelled { return }
         isResolving = false
         resolvingTitle = nil
+        // A removed/private video mid-playlist must not stop the playlist: skip forward (bounded).
+        if let failedTarget = pendingQueueTarget, let q = queue, failedTarget >= q.index,
+           case .unavailable? = error as? YTDLPFailure,
+           consecutiveQueueSkips < Self.maxConsecutiveSkips, q.entries.indices.contains(failedTarget + 1) {
+            consecutiveQueueSkips += 1
+            notice = "Skipped an unavailable video in the playlist."
+            log.notice("skipping unavailable playlist entry \(failedTarget + 1)")
+            resolveAndPlay(q.entries[failedTarget + 1].link, queueTarget: failedTarget + 1)
+            return
+        }
         if let failure = error as? YTDLPFailure {
             fail(failure.message, suggestion: failure.suggestion)
         } else {

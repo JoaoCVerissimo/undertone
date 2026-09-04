@@ -10,6 +10,7 @@ final class StatusItemController: NSObject {
     private var scrollMonitor: Any?
     private var flashTask: Task<Void, Never>?
     private var flashText: String?
+    private var iconCache: [String: NSImage] = [:]
 
     init(engine: PlayerEngine, panel: PanelController, settings: AppSettings) {
         self.engine = engine
@@ -36,6 +37,8 @@ final class StatusItemController: NSObject {
     private func installScrollVolume() {
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self, let button = self.statusItem.button, event.window == button.window else { return event }
+            // Trackpad momentum would keep changing the volume after the fingers lift.
+            guard event.momentumPhase.isEmpty else { return nil }
             let raw = event.scrollingDeltaY
             guard raw != 0 else { return event }
             let up = event.isDirectionInvertedFromDevice ? -raw : raw
@@ -126,10 +129,8 @@ final class StatusItemController: NSObject {
         } else {
             name = "play.circle"
         }
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Undertone")?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
-        image?.isTemplate = true
-        statusItem.button?.image = image
+        let image = icon(named: name)
+        if statusItem.button?.image !== image { statusItem.button?.image = image }
 
         var title = ""
         if let flashText {
@@ -137,9 +138,24 @@ final class StatusItemController: NSObject {
         } else if settings.showTitleInMenuBar, let track = engine.track {
             title = Self.truncated(track.title, to: 30)
         }
-        statusItem.length = title.isEmpty ? NSStatusItem.squareLength : NSStatusItem.variableLength
-        statusItem.button?.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
-        statusItem.button?.title = title.isEmpty ? "" : " " + title
+        // Setting these unconditionally relayouts the whole menu bar; only touch them on a real change.
+        let newTitle = title.isEmpty ? "" : " " + title
+        let newLength = title.isEmpty ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        if statusItem.length != newLength { statusItem.length = newLength }
+        if statusItem.button?.title != newTitle {
+            statusItem.button?.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
+            statusItem.button?.title = newTitle
+        }
+    }
+
+    /// Symbol images are built once; the scroll-wheel volume readout would otherwise create one per tick.
+    private func icon(named name: String) -> NSImage? {
+        if let cached = iconCache[name] { return cached }
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Undertone")?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+        image?.isTemplate = true
+        iconCache[name] = image
+        return image
     }
 
     private static func truncated(_ text: String, to limit: Int) -> String {

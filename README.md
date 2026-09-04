@@ -109,6 +109,34 @@ Nothing is downloaded to disk and no video is ever decoded. yt-dlp's reported du
 bar because YouTube's audio streams report a misleading length to the player. Resolved stream URLs are cached
 until their expiry so replays skip yt-dlp entirely.
 
+### Performance
+
+Measured on an M1 MacBook Air with `top` and `footprint`, so you can hold it to this:
+
+| State | CPU (one core) | Idle wake-ups | Memory |
+|---|---|---|---|
+| Idle, nothing loaded | 0% | 0 | ~18 MB |
+| Playing, panel closed | ~1% | 0 | ~32 MB |
+| Playing, panel open | ~2% | 0 | ~36 MB |
+| Playing at 2× | ~4% | ~0 | ~36 MB |
+| Paused for 10+ minutes | 0% | ~0 | ~33 MB |
+
+How it stays that way:
+
+- **No timers when you're not looking.** The progress clock runs only while the panel is open. With the
+  panel closed nothing ticks and nothing re-renders; the app just plays audio.
+- **Deep idle.** After 10 minutes paused it releases the media pipeline entirely (no buffering, no wake-ups).
+  Pressing Play rebuilds it from the stream cache, instantly. Tune with
+  `defaults write com.jverissimo.undertone idleUnloadSeconds -float 300`.
+- **Nothing spawned at launch.** yt-dlp is located and version-checked once, then that result is reused for
+  24 hours (validated cheaply), so launching, including at login, starts no processes. Recheck forces a probe.
+- **One yt-dlp at a time.** The background look-ahead (next playlist entry, the link on your clipboard)
+  never runs alongside a resolve you asked for, a link that just failed isn't retried for 10 minutes, and
+  automatic recoveries are capped at two per track. yt-dlp itself is the only real CPU cost, about 3–5
+  seconds of one core per new link, and only when something has to be resolved.
+- **Bounded memory.** Streams and artwork are cached with fixed limits; memory plateaus after a few tracks
+  rather than growing.
+
 ### Why it needs yt-dlp
 
 YouTube does not offer a stable public audio URL, and it changes how streams are served often. yt-dlp is the
