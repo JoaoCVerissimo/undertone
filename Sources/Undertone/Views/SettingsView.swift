@@ -24,7 +24,13 @@ struct SettingsView: View {
                 IconButton(symbol: "power", help: "Quit Undertone") { NSApp.terminate(nil) }
             }
 
-            section("Appearance") {
+            section("Appearance", trailing: {
+                Button("Reset to default") { settings.resetAppearance() }
+                    .buttonStyle(.link)
+                    .font(.caption2)
+                    .disabled(settings.isDefaultAppearance)
+                    .help("Blue tint at medium intensity on regular Liquid Glass")
+            }) {
                 swatches
                 HStack {
                     Text("Custom").font(.caption).frame(width: 60, alignment: .leading)
@@ -132,12 +138,20 @@ struct SettingsView: View {
         }
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func section<Content: View, Trailing: View>(
+        _ title: String,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .kerning(0.5)
+            HStack {
+                Text(title.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .kerning(0.5)
+                Spacer()
+                trailing()
+            }
             content()
         }
     }

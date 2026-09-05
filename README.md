@@ -36,6 +36,7 @@ Built for macOS 26 (Tahoe) with a real Liquid Glass panel you can tint to any co
 - **Volume from the menu bar:** scroll over the icon to change volume; optionally show the track title next to
   the icon.
 - **Liquid Glass, your colour:** pick a tint and glass style; the whole panel is one tinted glass surface.
+  **Reset to default** in Settings brings back the blue glass it ships with.
 - **Stays out of the way:** no Dock icon, low memory, and quitting fully stops everything.
 
 ## Requirements

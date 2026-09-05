@@ -63,10 +63,10 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let storedTint = defaults.string(forKey: Keys.tintHex)
-        tintHex = storedTint == nil ? "#3F86E8" : (storedTint!.isEmpty ? nil : storedTint)
-        tintOpacity = defaults.object(forKey: Keys.tintOpacity) as? Double ?? 0.45
-        glassStyle = GlassStyleChoice(rawValue: defaults.string(forKey: Keys.glassStyle) ?? "") ?? .regular
-        backdrop = BackdropChoice(rawValue: defaults.string(forKey: Keys.backdrop) ?? "") ?? .glass
+        tintHex = storedTint == nil ? DefaultAppearance.tintHex : (storedTint!.isEmpty ? nil : storedTint)
+        tintOpacity = defaults.object(forKey: Keys.tintOpacity) as? Double ?? DefaultAppearance.tintOpacity
+        glassStyle = GlassStyleChoice(rawValue: defaults.string(forKey: Keys.glassStyle) ?? "") ?? DefaultAppearance.glassStyle
+        backdrop = BackdropChoice(rawValue: defaults.string(forKey: Keys.backdrop) ?? "") ?? DefaultAppearance.backdrop
         speed = PlaybackSpeed(rawValue: defaults.double(forKey: Keys.speed)) ?? .normal
         volume = defaults.object(forKey: Keys.volume) as? Double ?? 1.0
         recent = RecentLinksStore(decoding: defaults.data(forKey: Keys.recent) ?? Data())
@@ -80,6 +80,26 @@ final class AppSettings {
         ytdlpCachedVersion = defaults.string(forKey: Keys.ytdlpCachedVersion)
         ytdlpProbedAt = defaults.object(forKey: Keys.ytdlpProbedAt) as? Date
         idleUnloadSeconds = defaults.object(forKey: Keys.idleUnloadSeconds) as? Double ?? 10 * 60
+    }
+
+    /// The look Undertone ships with: the Blue preset at medium intensity on regular Liquid Glass.
+    enum DefaultAppearance {
+        static let tintHex: String? = "#3F86E8"
+        static let tintOpacity = 0.45
+        static let glassStyle = GlassStyleChoice.regular
+        static let backdrop = BackdropChoice.glass
+    }
+
+    var isDefaultAppearance: Bool {
+        tintHex == DefaultAppearance.tintHex && abs(tintOpacity - DefaultAppearance.tintOpacity) < 0.001
+            && glassStyle == DefaultAppearance.glassStyle && backdrop == DefaultAppearance.backdrop
+    }
+
+    func resetAppearance() {
+        tintHex = DefaultAppearance.tintHex
+        tintOpacity = DefaultAppearance.tintOpacity
+        glassStyle = DefaultAppearance.glassStyle
+        backdrop = DefaultAppearance.backdrop
     }
 
     /// `nil` means plain, untinted glass. Stored as "" so the default tint is not re-applied on next launch.
