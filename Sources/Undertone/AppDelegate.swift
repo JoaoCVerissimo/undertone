@@ -36,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// `undertone://play?url=…` `play` `pause` `toggle` `next` `previous` `seek?to=90` `speed?value=2`
-    /// `volume?value=0.5` `mute` `repeat?mode=one` `open` `settings` `close` `quit`
+    /// `volume?value=0.5` `mute` `repeat?mode=one` `save` `open` `settings` `close` `quit`
     func application(_ application: NSApplication, open urls: [URL]) {
         guard isReady else {
             pendingURLs.append(contentsOf: urls)
@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 engine.cycleRepeatMode()
             }
+        case "save": engine.toggleSavedTrack()
         case "open": panel.show()
         case "settings": panel.show(settings: true)
         case "close": panel.hide()

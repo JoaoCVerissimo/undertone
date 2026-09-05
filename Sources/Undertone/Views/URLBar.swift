@@ -31,6 +31,7 @@ struct URLBar: View {
                 .help("Clear")
             }
             RecentLinksMenu()
+            SavedLinksMenu()
             Button(action: submit) {
                 Text(state.urlText.isEmpty ? "Paste & Play" : "Play")
                     .font(.system(size: 12, weight: .semibold))
@@ -98,5 +99,51 @@ struct RecentLinksMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Recent links")
+    }
+}
+
+/// Links kept on purpose: pick one to play it, hold ⌥ to remove it. Also saves the loaded playlist or Mix.
+struct SavedLinksMenu: View {
+    @Environment(PlayerEngine.self) private var engine
+    @Environment(AppSettings.self) private var settings
+    @Environment(PanelState.self) private var state
+
+    var body: some View {
+        Menu {
+            if settings.saved.items.isEmpty {
+                Text("Nothing saved yet")
+                Text("Press ★ on a track to keep it here.")
+            }
+            ForEach(settings.saved.items) { item in
+                Button {
+                    state.urlText = item.url.absoluteString
+                    engine.open(item.url.absoluteString)
+                } label: {
+                    Text(item.title)
+                }
+                .modifierKeyAlternate(.option) {
+                    Button("Remove \u{201C}\(item.title)\u{201D}") { settings.saved.remove(item.url) }
+                }
+            }
+            if engine.savableQueue != nil {
+                Divider()
+                let noun = engine.isMixLoaded ? "Mix" : "Playlist"
+                Button(engine.isQueueSaved ? "Remove This \(noun)" : "Save This \(noun)") { engine.toggleSavedQueue() }
+            }
+            if !settings.saved.items.isEmpty {
+                Divider()
+                Text("Hold ⌥ to remove an item")
+            }
+        } label: {
+            Image(systemName: "list.star")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Saved links")
     }
 }

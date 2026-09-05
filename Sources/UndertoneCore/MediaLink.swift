@@ -7,8 +7,9 @@ public struct MediaLink: Equatable, Sendable {
         case video(id: String)
         /// A real YouTube playlist (`list=PL…`, `OL…`, …) that yt-dlp can enumerate.
         case playlist(id: String, startVideoID: String?, startIndex: Int?)
-        /// A YouTube Mix / radio (`list=RD…`): cannot be enumerated, so only the video plays.
-        case mix(videoID: String)
+        /// A YouTube Mix / radio (`list=RD…`). YouTube generates one per video (mostly music); yt-dlp can list it
+        /// when it exists, so it is tried as a queue and falls back to the video alone.
+        case mix(videoID: String, listID: String)
         /// Any other http(s) URL. Handed to yt-dlp unchanged (it supports many sites).
         case other
     }
@@ -33,7 +34,7 @@ public struct MediaLink: Equatable, Sendable {
         switch kind {
         case .video(let id): return id
         case .playlist(_, let startVideoID, _): return startVideoID
-        case .mix(let videoID): return videoID
+        case .mix(let videoID, _): return videoID
         case .other: return nil
         }
     }
@@ -51,8 +52,10 @@ public struct MediaLink: Equatable, Sendable {
     /// Canonical URL to give yt-dlp.
     public var resolvedURL: URL {
         switch kind {
-        case .video(let id), .mix(videoID: let id):
+        case .video(let id):
             return URL(string: "https://www.youtube.com/watch?v=\(id)")!
+        case .mix(let id, let list):
+            return URL(string: "https://www.youtube.com/watch?v=\(id)&list=\(list)")!
         case .playlist(let id, _, _):
             return URL(string: "https://www.youtube.com/playlist?list=\(id)")!
         case .other:
@@ -94,18 +97,18 @@ public enum LinkParser {
         let startTime = (query["t"] ?? query["start"]).flatMap(parseTimestamp)
 
         if let list = query["list"].flatMap(validPlaylistID) {
-            if list.hasPrefix("RD") || list.hasPrefix("UL") {
-                if let videoID {
-                    return MediaLink(original: url, kind: .mix(videoID: videoID), startTime: startTime)
-                }
-                return MediaLink(original: url, kind: .other)
+            if let playlistID = listablePlaylistID(list) {
+                let index = query["index"].flatMap { Int($0) }
+                return MediaLink(
+                    original: url,
+                    kind: .playlist(id: playlistID, startVideoID: videoID, startIndex: index),
+                    startTime: startTime
+                )
             }
-            let index = query["index"].flatMap { Int($0) }
-            return MediaLink(
-                original: url,
-                kind: .playlist(id: list, startVideoID: videoID, startIndex: index),
-                startTime: startTime
-            )
+            if let videoID {
+                return MediaLink(original: url, kind: .mix(videoID: videoID, listID: list), startTime: startTime)
+            }
+            return MediaLink(original: url, kind: .other)
         }
         if let videoID {
             return MediaLink(original: url, kind: .video(id: videoID), startTime: startTime)
@@ -117,6 +120,19 @@ public enum LinkParser {
     static func validVideoID(_ candidate: String) -> String? {
         guard candidate.count == 11, candidate.allSatisfy(isIDCharacter) else { return nil }
         return candidate
+    }
+
+    /// The playlist yt-dlp can enumerate for a `list=` value, or nil for a Mix. Mixes (`RD…`, `UL…`) are generated per
+    /// session and YouTube refuses to list them; but YouTube Music's curated lists (`RDCLAK…`) are ordinary playlists,
+    /// and a radio started from a playlist (`RDAMPL` followed by that playlist's ID) can play the playlist itself.
+    static func listablePlaylistID(_ list: String) -> String? {
+        if list.hasPrefix("RDCLAK") { return list }
+        if list.hasPrefix("RDAMPL") {
+            let inner = String(list.dropFirst(6))
+            return inner.count >= 12 ? inner : nil
+        }
+        if list.hasPrefix("RD") || list.hasPrefix("UL") { return nil }
+        return list
     }
 
     static func validPlaylistID(_ candidate: String) -> String? {

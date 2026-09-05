@@ -115,6 +115,39 @@ final class PlayerEngine {
         }
     }
 
+    // MARK: - Saved links
+
+    /// The playing track as a plain video link, so a song heard in a Mix or playlist can be kept on its own.
+    var savableTrack: (url: URL, title: String)? {
+        guard let track else { return nil }
+        let url = track.webpageURL ?? URL(string: "https://www.youtube.com/watch?v=\(track.id)")!
+        return (url, track.title)
+    }
+
+    /// The pasted playlist or Mix, while one is loaded.
+    var savableQueue: (url: URL, title: String)? {
+        guard let queue, let pastedLink else { return nil }
+        return (pastedLink.resolvedURL, queue.title ?? "Playlist")
+    }
+
+    var isMixLoaded: Bool {
+        if queue != nil, case .mix = pastedLink?.kind { return true }
+        return false
+    }
+
+    var isTrackSaved: Bool { savableTrack.map { settings.saved.contains($0.url) } ?? false }
+    var isQueueSaved: Bool { savableQueue.map { settings.saved.contains($0.url) } ?? false }
+
+    func toggleSavedTrack() {
+        guard let item = savableTrack else { return }
+        settings.saved.toggle(url: item.url, title: item.title)
+    }
+
+    func toggleSavedQueue() {
+        guard let item = savableQueue else { return }
+        settings.saved.toggle(url: item.url, title: item.title)
+    }
+
     // MARK: - Opening links
 
     func open(_ text: String) {
@@ -135,9 +168,8 @@ final class PlayerEngine {
         log.notice("open \(link.original.absoluteString, privacy: .public)")
 
         if case .mix = link.kind {
-            notice = "YouTube mixes can't be listed, so just this video will play."
-        }
-        if link.isPlaylist {
+            openPlaylist(link, limit: Self.mixLimit)
+        } else if link.isPlaylist {
             openPlaylist(link)
         } else {
             queue = nil
@@ -145,16 +177,35 @@ final class PlayerEngine {
         }
     }
 
-    private func openPlaylist(_ link: MediaLink) {
+    /// A Mix is endless; this many entries become the queue (about three hours, listed in a few seconds).
+    static let mixLimit = 50
+
+    private func openPlaylist(_ link: MediaLink, limit: Int = 500) {
+        var isMix = false
+        if case .mix = link.kind { isMix = true }
         isResolving = true
-        resolvingTitle = "Loading playlist…"
+        resolvingTitle = isMix ? "Loading mix…" : "Loading playlist…"
         resolveTask = Task { [weak self] in
             guard let self else { return }
             do {
                 guard let client = await self.service.readyClient() else { self.handle(YTDLPFailure.notInstalled); return }
-                let entries = try await client.playlistEntries(link)
+                let entries: [PlaylistEntry]
+                do {
+                    entries = try await client.playlistEntries(link, limit: limit)
+                } catch where isMix && !Task.isCancelled {
+                    // Listing a Mix can fail where the video itself plays fine; keep the music going.
+                    self.notice = "Couldn't load the Mix, so just this video plays."
+                    self.resolveAndPlay(MediaLink(original: link.original, kind: .video(id: link.videoID ?? "")), startAt: link.startTime)
+                    return
+                }
                 guard !Task.isCancelled else { return }
-                var startVideo: String?
+                // YouTube has Mixes only for some videos (mostly music). Without one, yt-dlp hands back the video itself.
+                if isMix, entries.count <= 1, let seed = link.videoID {
+                    self.notice = "YouTube has no Mix for this video, so just this video plays."
+                    self.resolveAndPlay(MediaLink(original: link.original, kind: .video(id: seed)), startAt: link.startTime)
+                    return
+                }
+                var startVideo = link.videoID   // a Mix starts from the video it was built on
                 var startIndex: Int?
                 if case .playlist(_, let v, let i) = link.kind {
                     startVideo = v

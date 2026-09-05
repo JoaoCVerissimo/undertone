@@ -45,6 +45,7 @@ final class AppSettings {
         static let speed = "speed"
         static let volume = "volume"
         static let recent = "recentLinks"
+        static let saved = "savedLinks"
         static let ytdlpPath = "ytdlpPath"
         static let lastLink = "lastLink"
         static let repeatMode = "repeatMode"
@@ -70,6 +71,7 @@ final class AppSettings {
         speed = PlaybackSpeed(rawValue: defaults.double(forKey: Keys.speed)) ?? .normal
         volume = defaults.object(forKey: Keys.volume) as? Double ?? 1.0
         recent = RecentLinksStore(decoding: defaults.data(forKey: Keys.recent) ?? Data())
+        saved = SavedLinksStore(decoding: defaults.data(forKey: Keys.saved) ?? Data())
         ytdlpPathOverride = defaults.string(forKey: Keys.ytdlpPath)
         lastLink = defaults.string(forKey: Keys.lastLink)
         repeatMode = RepeatMode(rawValue: defaults.string(forKey: Keys.repeatMode) ?? "") ?? .off
@@ -123,6 +125,9 @@ final class AppSettings {
     }
     var recent: RecentLinksStore {
         didSet { defaults.set((try? recent.encoded()) ?? Data(), forKey: Keys.recent) }
+    }
+    var saved: SavedLinksStore {
+        didSet { defaults.set((try? saved.encoded()) ?? Data(), forKey: Keys.saved) }
     }
     var ytdlpPathOverride: String? {
         didSet { defaults.set(ytdlpPathOverride, forKey: Keys.ytdlpPath) }

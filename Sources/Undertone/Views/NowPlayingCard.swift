@@ -44,6 +44,17 @@ struct NowPlayingCard: View {
                 }
             }
             Spacer(minLength: 0)
+            if engine.track != nil, !engine.isResolving {
+                Button { engine.toggleSavedTrack() } label: {
+                    Image(systemName: engine.isTrackSaved ? "star.fill" : "star")
+                        .font(.system(size: 14))
+                        .foregroundStyle(engine.isTrackSaved ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(engine.isTrackSaved ? "Remove this track from saved links" : "Save this track")
+            }
         }
     }
 }

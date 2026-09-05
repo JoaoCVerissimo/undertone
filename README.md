@@ -37,6 +37,10 @@ Built for macOS 26 (Tahoe) with a real Liquid Glass panel you can tint to any co
   the icon.
 - **Liquid Glass, your colour:** pick a tint and glass style; the whole panel is one tinted glass surface.
   **Reset to default** in Settings brings back the blue glass it ships with.
+- **Mixes too:** paste a YouTube Mix (`list=RD…`) and its first 50 tracks become the queue. YouTube only
+  generates Mixes for some videos, mostly music; when there is none, just that video plays and Undertone says so.
+- **Saved links:** press ★ on the track you're hearing (from a Mix or playlist too) and it lands in the ★ list next
+  to the URL field, which can also keep a whole playlist or Mix. Hold ⌥ over an entry to remove it.
 - **Stays out of the way:** no Dock icon, low memory, and quitting fully stops everything.
 
 ## Requirements
@@ -95,7 +99,10 @@ undertone://toggle                   undertone://next      undertone://previous
 undertone://speed?value=2            undertone://seek?to=90
 undertone://volume?value=0.5         undertone://mute      undertone://repeat?mode=one
 undertone://open                     undertone://settings  undertone://close  undertone://quit
+undertone://save                     (toggle the playing track in saved links)
 ```
+
+Percent-encode the `url` value (`&` becomes `%26`), or the link's own parameters are read as Undertone's.
 
 ## How it works
 
@@ -176,6 +183,8 @@ e.g. `swift run UndertoneSelfTest --filter LinkParser`.
 - **A 403, or "requested format is not available".** yt-dlp is behind YouTube. `brew upgrade yt-dlp`.
 - **A specific video won't play** but others do. It may be private, age-restricted, members-only, or region-
   blocked. Undertone will say which.
+- **A Mix plays only one video.** YouTube generates Mixes only for some videos (mostly music). Without one,
+  Undertone says so and plays the video.
 - **Launch at login is greyed out.** Run the built app (`make install`), not a bare `swift run` build.
 
 ## Notes

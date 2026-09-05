@@ -48,10 +48,31 @@ import Testing
         #expect(startIndex == 3)
     }
 
-    @Test func mixesFallBackToTheVideo() throws {
+    @Test func personalMixesStayMixes() throws {
+        for list in ["RDaqz-KE-bpKQ", "RDAMVMaqz-KE-bpKQ", "RDMM", "ULaqz-KE-bpKQ"] {
+            let link = try #require(LinkParser.parse("https://www.youtube.com/watch?v=aqz-KE-bpKQ&list=\(list)&start_radio=1"))
+            #expect(link.kind == .mix(videoID: "aqz-KE-bpKQ", listID: list), "\(list)")
+        }
+    }
+
+    @Test func youTubeMusicCuratedListsArePlaylists() throws {
+        let link = try #require(LinkParser.parse("https://www.youtube.com/playlist?list=RDCLAK5uy_kmPRjHDECIcuVwnKsx2Ng7fyNgFKWNJFs"))
+        #expect(link.playlistID == "RDCLAK5uy_kmPRjHDECIcuVwnKsx2Ng7fyNgFKWNJFs")
+    }
+
+    @Test func playlistRadiosPlayTheUnderlyingPlaylist() throws {
+        let link = try #require(LinkParser.parse("https://www.youtube.com/watch?v=aqz-KE-bpKQ&list=RDAMPLPLwclSMR0kf70IL1wXYjBl2LVjmTaYq6CV"))
+        guard case .playlist(let id, let start, _) = link.kind else { Issue.record("expected .playlist"); return }
+        #expect(id == "PLwclSMR0kf70IL1wXYjBl2LVjmTaYq6CV")
+        #expect(start == "aqz-KE-bpKQ")
+    }
+
+    @Test func mixesKeepTheirListForYTDLP() throws {
         let link = try #require(LinkParser.parse("https://www.youtube.com/watch?v=aqz-KE-bpKQ&list=RDaqz-KE-bpKQ"))
-        #expect(link.kind == .mix(videoID: "aqz-KE-bpKQ"))
-        #expect(link.resolvedURL.absoluteString == "https://www.youtube.com/watch?v=aqz-KE-bpKQ")
+        #expect(link.kind == .mix(videoID: "aqz-KE-bpKQ", listID: "RDaqz-KE-bpKQ"))
+        #expect(link.resolvedURL.absoluteString == "https://www.youtube.com/watch?v=aqz-KE-bpKQ&list=RDaqz-KE-bpKQ")
+        #expect(link.cacheKey == "aqz-KE-bpKQ")
+        #expect(!link.isPlaylist)
         #expect(link.isPlaylist == false)
     }
 
