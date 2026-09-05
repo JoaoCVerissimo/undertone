@@ -93,7 +93,7 @@ undertone://play?url=<youtube-url>   undertone://play      undertone://pause
 undertone://toggle                   undertone://next      undertone://previous
 undertone://speed?value=2            undertone://seek?to=90
 undertone://volume?value=0.5         undertone://mute      undertone://repeat?mode=one
-undertone://open                     undertone://quit
+undertone://open                     undertone://settings  undertone://close  undertone://quit
 ```
 
 ## How it works

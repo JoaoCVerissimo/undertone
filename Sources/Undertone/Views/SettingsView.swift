@@ -17,7 +17,7 @@ struct SettingsView: View {
         @Bindable var settings = settings
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                IconButton(symbol: "chevron.left", help: "Back") { state.showingSettings = false }
+                IconButton(symbol: "chevron.left", help: "Back") { state.showSettings(false) }
                 Text("Settings")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()

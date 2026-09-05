@@ -9,17 +9,17 @@ struct PanelRoot: View {
     let state: PanelState
 
     var body: some View {
-        Group {
+        ZStack(alignment: .top) {
             if state.showingSettings {
-                SettingsView()
+                page { SettingsView() }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
-                MainView()
+                page { MainView() }
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
-        .frame(width: PanelController.width)
-        .fixedSize(horizontal: false, vertical: true)
+        // The window is sized to the page; pinning it to the top keeps any transient mismatch at the bottom.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(blurTint)
         .clipShape(.rect(cornerRadius: PanelController.cornerRadius))
         .tint(tint)
@@ -27,7 +27,17 @@ struct PanelRoot: View {
         .environment(settings)
         .environment(service)
         .environment(state)
-        .animation(.snappy(duration: 0.25), value: state.showingSettings)
+    }
+
+    /// A page takes its natural height up to what fits on the screen, scrolls beyond that, and reports its size.
+    private func page<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView(.vertical) {
+            content().frame(width: PanelController.width)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: PanelController.width)
+        .frame(maxHeight: state.maxContentHeight)
+        .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGSize.self) { proxy in
             proxy.size
         } action: { size in

@@ -45,7 +45,7 @@ struct MainView: View {
                 .font(.system(size: 14, weight: .semibold))
             Spacer()
             IconButton(symbol: "gearshape", help: "Settings") {
-                state.showingSettings = true
+                state.showSettings(true)
             }
             IconButton(symbol: "power", help: "Quit Undertone") {
                 NSApp.terminate(nil)
